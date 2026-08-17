@@ -162,48 +162,51 @@ export default function AIProductAnalyst() {
       };
       setMessages((prev) => [...prev, userMessage]);
 
-      // Parse exploration request for parameters
-      let limit = 20;
-      let rating: number | undefined;
-      let sentiment: "positive" | "neutral" | "negative" | undefined;
-      let theme: string | undefined;
+      // Semantic analysis: Extract meaning from natural language using regex patterns
+      const q = exploreQuestion.toLowerCase();
+      const params: ReviewsParams = {};
 
-      const lowerQ = exploreQuestion.toLowerCase();
-
-      if (lowerQ.includes("latest 20")) limit = 20;
-      else if (lowerQ.includes("latest 7")) limit = 7;
-      else if (lowerQ.includes("latest")) limit = 20;
-
-      // Parse rating patterns: "1-star", "1 star", "one star", etc.
-      if (lowerQ.includes("1-star") || lowerQ.includes("1 star")) rating = 1;
-      else if (lowerQ.includes("2-star") || lowerQ.includes("2 star")) rating = 2;
-      else if (lowerQ.includes("3-star") || lowerQ.includes("3 star")) rating = 3;
-      else if (lowerQ.includes("4-star") || lowerQ.includes("4 star")) rating = 4;
-      else if (lowerQ.includes("5-star") || lowerQ.includes("5 star")) rating = 5;
-
-      // Map natural language to sentiment (bad/poor/complain → negative; good/great/love → positive)
-      if (lowerQ.includes("negative") || lowerQ.includes("bad") || lowerQ.includes("poor") || lowerQ.includes("complain") || lowerQ.includes("issue") || lowerQ.includes("problem")) {
-        sentiment = "negative";
-      } else if (lowerQ.includes("positive") || lowerQ.includes("good") || lowerQ.includes("great") || lowerQ.includes("love") || lowerQ.includes("excellent") || lowerQ.includes("perfect")) {
-        sentiment = "positive";
-      } else if (lowerQ.includes("neutral")) {
-        sentiment = "neutral";
+      // Extract count: "latest 20", "top 5", "show me 10", etc.
+      const countMatch = q.match(/(\d+)\s*(reviews?|reviews?)/i) || q.match(/(?:latest|top|get|show me)\s+(\d+)/i);
+      if (countMatch) {
+        params.limit = Math.min(parseInt(countMatch[1]), 100);
+      } else if (q.includes("latest") || q.includes("recent") || q.includes("newest")) {
+        params.limit = 20;
       }
 
-      if (lowerQ.includes("quality")) theme = "quality";
-      else if (lowerQ.includes("packaging")) theme = "packaging";
-      else if (lowerQ.includes("delivery")) theme = "delivery";
-      else if (lowerQ.includes("size")) theme = "size";
-      else if (lowerQ.includes("fit")) theme = "fit";
-      else if (lowerQ.includes("comfort")) theme = "comfort";
-      else if (lowerQ.includes("color")) theme = "color";
-      else if (lowerQ.includes("durability")) theme = "durability";
-      else if (lowerQ.includes("value")) theme = "value";
-      else if (lowerQ.includes("material")) theme = "material";
+      // Extract rating: "1-star", "1 star", "1 star", etc.
+      const ratingMatch = q.match(/(\d)\s*-?\s*star/i);
+      if (ratingMatch) {
+        params.rating = parseInt(ratingMatch[1]);
+      }
 
-      console.log("Parsed parameters:", { limit, rating, sentiment, theme, window });
+      // Extract sentiment using semantic keyword matching (handles ANY related word)
+      // Negative indicators: bad, poor, terrible, awful, hate, complain, issue, problem, broken, useless, disappointing, crash, faulty, malfunction, etc.
+      const negativeKeywords = /\b(bad|poor|terrible|awful|horrible|hate|hated|complain|complaint|issue|issues|problem|problems|broken|useless|waste|disappointed|disappointing|wrong|worse|worst|concern|concerns|negative|unhappy|unsatisfied|defect|defective|crash|crashed|faulty|fail|failed|malfunction|bug|bugs|bugged|error|errors|failure|failures|fail|failed)\b/i;
 
-      const reviewsResp = await getProductReviews(platform, productId, { window, limit, rating, sentiment, theme });
+      // Positive indicators: good, great, excellent, love, amazing, perfect, wonderful, fantastic, awesome, satisfied, etc.
+      const positiveKeywords = /\b(good|great|excellent|love|loved|amazing|perfect|wonderful|fantastic|awesome|impressed|satisfying|satisfied|happy|happiest|best|better|impressive|impressed|amazing|reliable|quality|worth|valuable|excellent|superb|outstanding|brilliant|nice|lovely)\b/i;
+
+      if (negativeKeywords.test(exploreQuestion)) {
+        params.sentiment = "negative";
+      } else if (positiveKeywords.test(exploreQuestion)) {
+        params.sentiment = "positive";
+      } else if (q.includes("neutral")) {
+        params.sentiment = "neutral";
+      }
+
+      // Extract theme: quality, packaging, delivery, size, fit, comfort, color, durability, value, material
+      const themes = ["quality", "packaging", "delivery", "size", "fit", "comfort", "color", "durability", "value", "material", "product_mismatch"];
+      for (const theme of themes) {
+        if (q.includes(theme)) {
+          params.theme = theme;
+          break;
+        }
+      }
+
+      console.log("Parsed parameters:", { ...params, window });
+
+      const reviewsResp = await getProductReviews(platform, productId, { window, ...params });
       console.log("getProductReviews response:", reviewsResp);
 
       const exploreMessage: LocalMessage = {
