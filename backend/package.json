@@ -1,24 +1,59 @@
 {
   "name": "backend",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Product Review Intelligence Platform — backend",
+  "main": "dist/server.js",
+  "type": "module",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "migrate": "tsx scripts/runMigrations.ts",
+    "ingest:flipkart": "tsx src/modules/ingestion/runIngestion.ts flipkart",
+    "ingest:myntra": "tsx src/modules/ingestion/runIngestion.ts myntra",
+    "canary": "tsx src/security/canary.ts",
+    "safety-check": "tsx scripts/checkNoWrites.ts",
+    "seed:local-fixtures": "tsx scripts/seedLocalReviewFixtures.ts",
+    "analytics:rebuild": "tsx scripts/rebuildAnalytics.ts",
+    "ai:sentiment": "tsx scripts/runAiSentimentPipeline.ts",
+    "ai:canary": "tsx scripts/geminiCanary.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "commonjs",
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.116.0",
+    "@google/genai": "^2.16.0",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
+    "express-rate-limit": "^8.6.2",
     "helmet": "^8.3.0",
+    "jsonwebtoken": "^9.0.3",
+    "openai": "^7.4.0",
+    "p-retry": "^6.2.1",
     "pg": "^8.23.0",
-    "sequelize": "^6.37.8"
+    "pino": "^9.4.0",
+    "sequelize": "^6.37.8",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
-    "nodemon": "^3.1.14"
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/node": "^22.10.2",
+    "@types/pg": "^8.11.10",
+    "@types/supertest": "^7.2.1",
+    "@vitest/coverage-v8": "^2.1.8",
+    "nodemon": "^3.1.14",
+    "pino-pretty": "^13.0.0",
+    "supertest": "^7.2.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
   }
 }

@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS idx_normalized_reviews_platform_canonical_id;

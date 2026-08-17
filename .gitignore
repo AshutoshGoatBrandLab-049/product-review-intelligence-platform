@@ -1,1 +1,6 @@
 backend/node_modules/
+backend/dist/
+backend/coverage/
+backend/.env
+backend/.env.local
+backend/.env.*.local
