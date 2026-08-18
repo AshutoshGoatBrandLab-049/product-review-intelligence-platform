@@ -6,10 +6,15 @@ import OpenAI, {
   APIError,
 } from "openai";
 import { AiProviderError, type AiFailureCategory, type AiProvider } from "./aiProvider.js";
-import type { AiAnalysisInput } from "../types.js";
+import type { AiAnalysisInput, ReviewWithText } from "../types.js";
 import type { ProductEvidencePackage } from "../evidencePackage.js";
 import { CITABLE_METRIC_FIELDS } from "../narrator.js";
 import { THEME_VOCABULARY } from "../../../database/appStore/models/reviewTheme.js";
+import type { AnalyticalIntent } from "../intentDetection.js";
+import { describeIntent, recommendationInstructionLine } from "../intentDetection.js";
+import { QUERY_ACTIONS } from "../queryResolution.js";
+import type { QueryResolutionInput } from "../queryUnderstanding.js";
+import { QUERY_RESOLUTION_SYSTEM_PROMPT } from "./queryResolutionPrompt.js";
 
 /**
  * Phase 10 — OpenAI provider. Mirrors AnthropicProvider's error classification
@@ -97,7 +102,10 @@ const NARRATOR_TOOL: OpenAI.Chat.ChatCompletionTool = {
           items: {
             type: "object",
             properties: {
-              theme: { type: "string", enum: [...THEME_VOCABULARY] },
+              // Phase 10 AI Product Analyst intent/context correction — relaxed
+              // from a fixed enum so a genuinely-discovered aspect can be
+              // named; re-validated deterministically in narrator.ts.
+              theme: { type: "string", maxLength: 80 },
               explanation: { type: "string", maxLength: 500 },
               evidenceReviewIds: { type: "array", maxItems: 10, items: { type: "string" } },
             },
@@ -113,13 +121,64 @@ const NARRATOR_TOOL: OpenAI.Chat.ChatCompletionTool = {
               reason: { type: "string", maxLength: 500 },
               evidenceReviewIds: { type: "array", maxItems: 10, items: { type: "string" } },
               confidence: { type: "number", minimum: 0, maximum: 1 },
-              theme: { type: "string", enum: [...THEME_VOCABULARY] },
+              theme: { type: "string", maxLength: 80 },
             },
             required: ["reason", "evidenceReviewIds", "confidence"],
           },
         },
       },
       required: ["summary", "rootCause", "recommendations"],
+    },
+  },
+};
+
+/**
+ * Phase 10 semantic-query-understanding — query-resolution tool. The model
+ * NEVER answers the user's question here; it only classifies which closed
+ * `action` bucket the question belongs to and extracts structural
+ * parameters. `action` is an enum generated from QUERY_ACTIONS (the single
+ * source of truth also used by the deterministic fallback resolver in
+ * queryResolution.ts) — the model cannot return a value outside this set.
+ */
+const QUERY_RESOLUTION_TOOL: OpenAI.Chat.ChatCompletionTool = {
+  type: "function",
+  function: {
+    name: "record_query_resolution",
+    description:
+      "Resolves a user's natural-language question about a product's customer reviews into a structured backend operation. Never answers the question directly — only classifies WHICH closed action bucket it belongs to and extracts structural parameters (timeframe, sentiment, quantity, aspect).",
+    parameters: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: [...QUERY_ACTIONS] },
+        timeframeDescriptor: {
+          type: "object",
+          description:
+            "A SEMANTIC description of the timeframe the user meant — never a computed date. Use type NONE when no concrete timeframe was expressed.",
+          properties: {
+            type: { type: "string", enum: ["RELATIVE", "ABSOLUTE", "NAMED", "NONE"] },
+            value: { type: ["number", "null"], description: "For RELATIVE only, e.g. 5 for 'last 5 days'." },
+            unit: { type: ["string", "null"], enum: ["day", "week", "month", "year", null] },
+            start: { type: ["string", "null"], description: "ISO date YYYY-MM-DD, for ABSOLUTE only." },
+            end: { type: ["string", "null"], description: "ISO date YYYY-MM-DD, for ABSOLUTE only." },
+            name: {
+              type: ["string", "null"],
+              description: "For NAMED only: one of yesterday, today, last_week, this_month, last_month.",
+            },
+          },
+          required: ["type"],
+        },
+        sentiment: { type: ["string", "null"], enum: ["positive", "negative", "neutral", null] },
+        quantity: { type: ["number", "null"], description: "How many reviews were requested, if a count was named." },
+        aspect: { type: ["string", "null"], maxLength: 80, description: "A specific product aspect/theme mentioned or implied, if any." },
+        contextReference: {
+          type: "boolean",
+          description:
+            "True if this question uses a pronoun or implicit reference ('it', 'that', 'those', 'them', 'show me', bare 'why?') that depends on the supplied conversationContext to resolve.",
+        },
+        responseStyle: { type: "string", enum: ["CONCISE", "DETAILED", "DEFAULT"] },
+        reasoning: { type: "string", maxLength: 500, description: "Brief internal reasoning for debugging/logging only — never shown to the user." },
+      },
+      required: ["action", "timeframeDescriptor", "sentiment", "quantity", "aspect", "contextReference", "responseStyle", "reasoning"],
     },
   },
 };
@@ -175,8 +234,22 @@ export class OpenAiProvider implements AiProvider {
     }
   }
 
-  async narrate(evidencePackage: ProductEvidencePackage): Promise<unknown> {
+  async narrate(
+    evidencePackage: ProductEvidencePackage,
+    userQuestion?: string,
+    analyticalIntent?: AnalyticalIntent,
+  ): Promise<unknown> {
     try {
+      // Build context from question and intent (Phase 10 Step 3)
+      let contextLine = "Explain the following product review evidence.";
+      if (userQuestion) {
+        contextLine = `Answer the following question based on the product review evidence: "${userQuestion}"`;
+      }
+      if (analyticalIntent) {
+        contextLine += ` Focus on: ${describeIntent(analyticalIntent)}.`;
+        contextLine += recommendationInstructionLine(analyticalIntent);
+      }
+
       const response = await this.client.chat.completions.create({
         model: this.model,
         max_tokens: 1536,
@@ -186,7 +259,7 @@ export class OpenAiProvider implements AiProvider {
           {
             role: "user",
             content:
-              `Explain the following product review evidence. Use language like ` +
+              `${contextLine} Use language like ` +
               `"Reviews indicate..." or "Among the analyzed reviews...". Never claim ` +
               `sales causality reviews alone cannot prove. Every root-cause and ` +
               `recommendation must cite canonical_review_id values ONLY from the ` +
@@ -204,6 +277,95 @@ export class OpenAiProvider implements AiProvider {
               `tie to one of these fields should not be stated as a specific evidence-derived ` +
               `figure at all.\n\n` +
               JSON.stringify(evidencePackage, null, 2),
+          },
+        ],
+      });
+
+      const toolCall = response.choices[0]?.message.tool_calls?.[0];
+      if (!toolCall || toolCall.type !== "function") {
+        throw new AiProviderError(this.name, "model did not return a function call");
+      }
+
+      return JSON.parse(toolCall.function.arguments);
+    } catch (err) {
+      if (err instanceof AiProviderError) throw err;
+      const classified = classifyOpenaiError(err);
+      throw new AiProviderError(this.name, classified.message, {
+        retryable: classified.retryable,
+        retryAfterMs: classified.retryAfterMs,
+        category: classified.category,
+      });
+    }
+  }
+
+  async analyzeReviewBatch(reviews: ReviewWithText[], prompt: string): Promise<unknown> {
+    try {
+      const response = await this.client.chat.completions.create({
+        model: this.model,
+        max_tokens: 4096,
+        messages: [
+          {
+            role: "user",
+            content: prompt,
+          },
+        ],
+      });
+
+      const content = response.choices[0]?.message.content;
+      if (!content) {
+        throw new AiProviderError(this.name, "model returned no content");
+      }
+
+      // Handle markdown-wrapped JSON (OpenAI sometimes wraps with ```json and ```)
+      let jsonContent = content;
+      if (content.includes("```json")) {
+        const jsonMatch = content.match(/```json\s*([\s\S]*?)\s*```/);
+        if (jsonMatch && jsonMatch[1]) {
+          jsonContent = jsonMatch[1];
+        }
+      } else if (content.includes("```")) {
+        const jsonMatch = content.match(/```\s*([\s\S]*?)\s*```/);
+        if (jsonMatch && jsonMatch[1]) {
+          jsonContent = jsonMatch[1];
+        }
+      }
+
+      // Parse JSON response
+      return JSON.parse(jsonContent);
+    } catch (err) {
+      if (err instanceof AiProviderError) throw err;
+      const classified = classifyOpenaiError(err);
+      throw new AiProviderError(this.name, classified.message, {
+        retryable: classified.retryable,
+        retryAfterMs: classified.retryAfterMs,
+        category: classified.category,
+      });
+    }
+  }
+
+  async resolveQuery(input: QueryResolutionInput): Promise<unknown> {
+    try {
+      const response = await this.client.chat.completions.create({
+        model: this.model,
+        max_tokens: 500,
+        tools: [QUERY_RESOLUTION_TOOL],
+        tool_choice: { type: "function", function: { name: "record_query_resolution" } },
+        messages: [
+          {
+            role: "system",
+            content: QUERY_RESOLUTION_SYSTEM_PROMPT,
+          },
+          {
+            role: "user",
+            content: JSON.stringify(
+              {
+                userQuestion: input.userQuestion,
+                conversationContext: input.conversationContext,
+                productContext: input.productContext,
+              },
+              null,
+              2,
+            ),
           },
         ],
       });

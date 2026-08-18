@@ -285,6 +285,7 @@ export interface EvidenceReviewsResponse {
 export interface ProductReviewsResponse {
   reviews: ReviewDetail[];
   count: number;
+  totalMatchingCount?: number;
   requestedLimit?: number;
 }
 
@@ -294,8 +295,17 @@ export interface ProductAnalystResponse {
   window: DateWindow;
   userQuestion: string;
   answer: string;
-  analysis: NarratorResult;
+  /** null for retrieval / clarification responses — those never run the narrator. */
+  analysis: NarratorResult | null;
   cacheHit: boolean;
+  /** Present only for RETRIEVAL-intent responses — real DB-backed reviews, never AI-invented. */
+  reviews?: ReviewDetail[];
+  totalMatchingCount?: number;
+  requestedLimit?: number;
+  needsClarification?: boolean;
+  clarificationPrompt?: string;
+  multiIntentDetected?: boolean;
+  multiIntentNote?: string;
 }
 
 export interface ConversationMessage {
@@ -303,6 +313,9 @@ export interface ConversationMessage {
   content: string;
   timestamp: string;
   analysis?: NarratorResult;
+  intent?: string;
+  aspect?: string;
+  reviewIds?: string[];
 }
 
 export interface ConversationResponse {

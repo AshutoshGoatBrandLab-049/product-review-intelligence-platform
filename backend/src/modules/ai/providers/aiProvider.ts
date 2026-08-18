@@ -1,5 +1,8 @@
-import type { AiAnalysisInput } from "../types.js";
+import type { AiAnalysisInput, ReviewWithText } from "../types.js";
 import type { ProductEvidencePackage } from "../evidencePackage.js";
+import type { AnalyticalIntent } from "../intentDetection.js";
+import type { QueryResolutionInput } from "../queryUnderstanding.js";
+import type { PlannerInput } from "../semanticPlanner.js";
 
 /**
  * Phase 4 §2 — provider abstraction. The pipeline (pipeline.ts) and the
@@ -12,8 +15,56 @@ export interface AiProvider {
   readonly modelVersion: string;
   /** Returns raw, unvalidated output — the caller runs it through validateAiOutput(). */
   analyzeReview(input: AiAnalysisInput): Promise<unknown>;
-  /** Returns raw, unvalidated output — the caller runs it through validateNarratorOutput(). */
-  narrate(evidencePackage: ProductEvidencePackage): Promise<unknown>;
+  /** Returns raw, unvalidated output — the caller runs it through validateNarratorOutput().
+   * Phase 10 Step 3: userQuestion and analyticalIntent are optional but recommended
+   * for intent-aware AI reasoning. Providers should use them to contextualize responses.
+   */
+  narrate(
+    evidencePackage: ProductEvidencePackage,
+    userQuestion?: string,
+    analyticalIntent?: AnalyticalIntent,
+  ): Promise<unknown>;
+  /** Phase 10 Step 3: Analyze a batch of reviews for semantic aspects.
+   * Returns array of {canonicalReviewId, observations: [{aspect, sentiment, textSnippet, confidence}]}
+   */
+  analyzeReviewBatch?(reviews: ReviewWithText[], prompt: string): Promise<unknown>;
+  /**
+   * Phase 10 semantic-query-understanding — structured/function-calling
+   * query resolution. Given the user's raw question plus prior-turn and
+   * product context, returns raw, unvalidated output; the caller
+   * (queryUnderstanding.ts's resolveQuerySemantic()) runs it through
+   * ResolvedQueryLlmOutputSchema before trusting any field. The model
+   * chooses WHICH of a closed action enum a question belongs to and extracts
+   * structural parameters only (a timeframe DESCRIPTOR, not a computed date;
+   * sentiment; quantity; aspect) — it never computes a date, a review ID, or
+   * a count.
+   *
+   * Optional (like analyzeReviewBatch above) so existing ad-hoc AiProvider
+   * test doubles that only exercise analyzeReview()/narrate() keep
+   * compiling unchanged — queryUnderstanding.ts's resolveQuerySemantic()
+   * treats an absent implementation exactly like a provider failure and
+   * falls back to the deterministic resolver.
+   */
+  resolveQuery?(input: QueryResolutionInput): Promise<unknown>;
+
+  /**
+   * Phase 10 Step 1 (PHASE B) — Semantic operation planning. Given a user's
+   * natural-language question, returns a structured OperationPlan (or
+   * cannotPlan response) using LLM semantic understanding.
+   *
+   * The model chooses which operations to sequence, with what parameters,
+   * and in what dependency order. It NEVER generates SQL, code, or arbitrary
+   * functions — only selects from the Phase A operation registry.
+   *
+   * Returns raw, unvalidated output (OperationPlanLlmOutput); the caller
+   * (semanticPlanner.ts's planOperations()) runs it through schema validation
+   * and PlanValidator before trusting any field.
+   *
+   * Optional (like resolveQuery and analyzeReviewBatch) so existing test
+   * doubles keep compiling unchanged — semanticPlanner.ts treats an absent
+   * implementation as a provider failure and returns a rejection.
+   */
+  planOperations?(input: PlannerInput): Promise<unknown>;
 }
 
 /**

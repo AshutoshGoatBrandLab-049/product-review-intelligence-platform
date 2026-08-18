@@ -6,7 +6,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { analyzeProductQuestion } from "@/api/endpoints/analyst";
 import { getOrCreateConversation } from "@/api/endpoints/conversation";
-import { getProductReviews } from "@/api/endpoints/reviews";
 import { getEvidenceReviews } from "@/api/endpoints/evidence";
 import type { Platform, NamedWindow, ConversationMessage as ConvMsg, ReviewDetail } from "@/types/api";
 
@@ -14,13 +13,22 @@ import type { Platform, NamedWindow, ConversationMessage as ConvMsg, ReviewDetai
  * Phase 10 Step 2 — AI Product Analyst with team-shared conversation persistence.
  * Team members select a product and share investigation history via conversations.
  * One conversation per (platform, product, window) — visible to all authorized team members.
- * Supports both FLOW A (AI evidence linking) and FLOW B (review exploration).
+ *
+ * Phase 10 AI Product Analyst intent/context correction: collapsed to a
+ * SINGLE code path. Both typed questions and quick-action buttons now go
+ * through the same (now intent-branching) analyzeProductQuestion() call,
+ * passing conversationId so ambiguous follow-ups resolve against real
+ * prior-turn state. The server owns ALL natural-language -> intent/filter
+ * derivation now — the regex-based handleExploreReviews() NLU that used to
+ * live here (duplicating and diverging from the backend classifier) has
+ * been removed.
  */
 
 interface LocalMessage extends ConvMsg {
   loadingReviews?: boolean;
   evidenceReviews?: ReviewDetail[];
   explorationReviews?: ReviewDetail[];
+  needsClarification?: boolean;
 }
 
 export default function AIProductAnalyst() {
@@ -30,6 +38,7 @@ export default function AIProductAnalyst() {
   const [window, setWindow] = useState<NamedWindow>("30d");
   const [question, setQuestion] = useState("");
   const [messages, setMessages] = useState<LocalMessage[]>([]);
+  const [conversationId, setConversationId] = useState<string | undefined>(undefined);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -39,12 +48,14 @@ export default function AIProductAnalyst() {
     const loadConversation = async () => {
       if (!productId.trim()) {
         setMessages([]);
+        setConversationId(undefined);
         return;
       }
 
       try {
         // Fetch team-shared conversation for this product/window
         const conv = await getOrCreateConversation(platform, productId, window);
+        setConversationId(conv.id);
         setMessages(
           conv.messages.map((m) => ({
             ...m,
@@ -69,8 +80,9 @@ export default function AIProductAnalyst() {
   }, [messages, loading]);
 
 
-  const handleAnalyze = async () => {
-    if (!question.trim() || !productId.trim()) {
+  const handleAnalyze = async (overrideQuestion?: string) => {
+    const effectiveQuestion = overrideQuestion ?? question;
+    if (!effectiveQuestion.trim() || !productId.trim()) {
       setError("Please enter both a product ID and a question.");
       return;
     }
@@ -81,27 +93,59 @@ export default function AIProductAnalyst() {
     try {
       const userMessage: ConvMsg = {
         role: "user",
-        content: question,
+        content: effectiveQuestion,
         timestamp: new Date().toISOString(),
       };
       setMessages((prev) => [...prev, userMessage]);
       setQuestion("");
 
-      const response = await analyzeProductQuestion(platform, productId, question, window);
+      const response = await analyzeProductQuestion(platform, productId, effectiveQuestion, window, conversationId);
 
+      // Clarification: server judged the question too ambiguous even with
+      // conversation context — render plainly, no fabricated analysis.
+      if (response.needsClarification) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: "ai",
+            content: response.clarificationPrompt ?? response.answer,
+            timestamp: new Date().toISOString(),
+            needsClarification: true,
+          },
+        ]);
+        return;
+      }
+
+      // RETRIEVAL response: real DB-backed reviews, rendered directly —
+      // never routed through the narrator/evidence-linking path.
+      if (response.reviews) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: "ai",
+            content: response.answer,
+            timestamp: new Date().toISOString(),
+            explorationReviews: response.reviews,
+          },
+        ]);
+        return;
+      }
+
+      // ANALYSIS response: existing FLOW A evidence-linking rendering.
       const aiMessage: LocalMessage = {
         role: "ai",
         content: response.answer,
         timestamp: new Date().toISOString(),
-        analysis: response.analysis,
+        analysis: response.analysis ?? undefined,
         loadingReviews: true,
       };
       setMessages((prev) => [...prev, aiMessage]);
 
-      // FLOW A: Fetch evidence reviews if AI cited any IDs
-      const evidenceIds = response.analysis.rootCause.flatMap((rc: any) => rc.evidenceReviewIds).concat(
-        response.analysis.recommendations.flatMap((r: any) => r.evidenceReviewIds),
-      );
+      const evidenceIds = response.analysis
+        ? response.analysis.rootCause
+            .flatMap((rc: any) => rc.evidenceReviewIds)
+            .concat(response.analysis.recommendations.flatMap((r: any) => r.evidenceReviewIds))
+        : [];
 
       if (evidenceIds.length > 0) {
         try {
@@ -126,100 +170,6 @@ export default function AIProductAnalyst() {
       }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "Failed to analyze product";
-      setError(errorMessage);
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "ai",
-          content: `Error: ${errorMessage}`,
-          timestamp: new Date().toISOString(),
-        },
-      ]);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Handle review exploration requests
-  const handleExploreReviews = async (exploreQuestion: string) => {
-    console.log("handleExploreReviews called with:", exploreQuestion);
-    if (!productId.trim()) {
-      setError("Please select a product first");
-      return;
-    }
-
-    setLoading(true);
-    setError(null);
-
-    try {
-      // For now, we're adding to local state only
-      // Note: Persistence to conversation table would require a PUT/POST endpoint
-      // which is out of scope for Phase 10 Step 2 (read-only endpoints only per Phase 6)
-      const userMessage: LocalMessage = {
-        role: "user",
-        content: exploreQuestion,
-        timestamp: new Date().toISOString(),
-      };
-      setMessages((prev) => [...prev, userMessage]);
-
-      // Semantic analysis: Extract meaning from natural language using regex patterns
-      const q = exploreQuestion.toLowerCase();
-      const params: ReviewsParams = {};
-
-      // Extract count: "latest 20", "top 5", "show me 10", etc.
-      const countMatch = q.match(/(\d+)\s*(reviews?|reviews?)/i) || q.match(/(?:latest|top|get|show me)\s+(\d+)/i);
-      if (countMatch) {
-        params.limit = Math.min(parseInt(countMatch[1]), 100);
-      } else if (q.includes("latest") || q.includes("recent") || q.includes("newest")) {
-        params.limit = 20;
-      }
-
-      // Extract rating: "1-star", "1 star", "1 star", etc.
-      const ratingMatch = q.match(/(\d)\s*-?\s*star/i);
-      if (ratingMatch) {
-        params.rating = parseInt(ratingMatch[1]);
-      }
-
-      // Extract sentiment using semantic keyword matching (handles ANY related word)
-      // Negative indicators: bad, poor, terrible, awful, hate, complain, issue, problem, broken, useless, disappointing, crash, faulty, malfunction, etc.
-      const negativeKeywords = /\b(bad|poor|terrible|awful|horrible|hate|hated|complain|complaint|issue|issues|problem|problems|broken|useless|waste|disappointed|disappointing|wrong|worse|worst|concern|concerns|negative|unhappy|unsatisfied|defect|defective|crash|crashed|faulty|fail|failed|malfunction|bug|bugs|bugged|error|errors|failure|failures|fail|failed)\b/i;
-
-      // Positive indicators: good, great, excellent, love, amazing, perfect, wonderful, fantastic, awesome, satisfied, etc.
-      const positiveKeywords = /\b(good|great|excellent|love|loved|amazing|perfect|wonderful|fantastic|awesome|impressed|satisfying|satisfied|happy|happiest|best|better|impressive|impressed|amazing|reliable|quality|worth|valuable|excellent|superb|outstanding|brilliant|nice|lovely)\b/i;
-
-      if (negativeKeywords.test(exploreQuestion)) {
-        params.sentiment = "negative";
-      } else if (positiveKeywords.test(exploreQuestion)) {
-        params.sentiment = "positive";
-      } else if (q.includes("neutral")) {
-        params.sentiment = "neutral";
-      }
-
-      // Extract theme: quality, packaging, delivery, size, fit, comfort, color, durability, value, material
-      const themes = ["quality", "packaging", "delivery", "size", "fit", "comfort", "color", "durability", "value", "material", "product_mismatch"];
-      for (const theme of themes) {
-        if (q.includes(theme)) {
-          params.theme = theme;
-          break;
-        }
-      }
-
-      console.log("Parsed parameters:", { ...params, window });
-
-      const reviewsResp = await getProductReviews(platform, productId, { window, ...params });
-      console.log("getProductReviews response:", reviewsResp);
-
-      const exploreMessage: LocalMessage = {
-        role: "ai",
-        content: `Found ${reviewsResp.count} review${reviewsResp.count !== 1 ? "s" : ""} matching your request.`,
-        timestamp: new Date().toISOString(),
-        explorationReviews: reviewsResp.reviews,
-      };
-      console.log("Setting exploration message with reviews:", reviewsResp.reviews);
-      setMessages((prev) => [...prev, exploreMessage]);
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : "Failed to retrieve reviews";
-      console.error("handleExploreReviews error:", err);
       setError(errorMessage);
       setMessages((prev) => [
         ...prev,
@@ -436,7 +386,7 @@ export default function AIProductAnalyst() {
                 className="flex-1"
               />
               <Button
-                onClick={handleAnalyze}
+                onClick={() => handleAnalyze()}
                 disabled={loading || !question.trim()}
                 className="bg-violet-600 hover:bg-violet-700"
               >
@@ -451,28 +401,29 @@ export default function AIProductAnalyst() {
               </Button>
             </div>
 
-            {/* Quick Actions */}
+            {/* Quick Actions — all go through the single analyzeProductQuestion
+                path now; the server resolves retrieval vs analysis intent. */}
             <div>
               <p className="text-xs font-medium text-muted-foreground mb-2">Quick investigation requests:</p>
               <div className="grid gap-2 md:grid-cols-2 lg:grid-cols-3">
                 {[
-                  { q: "What's wrong with this product?", explore: false },
-                  { q: "Show me the latest 20 reviews", explore: true },
-                  { q: "Show me negative reviews", explore: true },
-                  { q: "Show me bad reviews", explore: true },
-                  { q: "What are customers complaining about?", explore: false },
-                  { q: "Show me 1-star reviews", explore: true },
-                  { q: "What's the biggest issue?", explore: false },
-                ].map((item, i) => (
+                  "What's wrong with this product?",
+                  "Show me the latest 20 reviews",
+                  "Show me negative reviews",
+                  "Show me bad reviews",
+                  "What are customers complaining about?",
+                  "Show me 1-star reviews",
+                  "What's the biggest issue?",
+                ].map((q, i) => (
                   <Button
                     key={i}
                     variant="outline"
                     size="sm"
-                    onClick={() => (item.explore ? handleExploreReviews(item.q) : setQuestion(item.q))}
+                    onClick={() => handleAnalyze(q)}
                     disabled={loading}
                     className="text-xs"
                   >
-                    {item.q}
+                    {q}
                   </Button>
                 ))}
               </div>

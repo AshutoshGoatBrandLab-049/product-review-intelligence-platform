@@ -1,7 +1,11 @@
 import { AiProviderError, type AiProvider } from "./aiProvider.js";
-import type { AiAnalysisInput } from "../types.js";
+import type { AiAnalysisInput, ReviewWithText } from "../types.js";
 import type { ProductEvidencePackage } from "../evidencePackage.js";
 import { THEME_VOCABULARY } from "../../../database/appStore/models/reviewTheme.js";
+import { AnalyticalIntent } from "../intentDetection.js";
+import { resolveQuery, actionToIntent, type QueryAction } from "../queryResolution.js";
+import type { QueryResolutionInput } from "../queryUnderstanding.js";
+import type { PlannerInput } from "../semanticPlanner.js";
 
 /**
  * Phase 4 §11 — deterministic mock provider. The test suite never depends on
@@ -45,7 +49,11 @@ export class MockAiProvider implements AiProvider {
     };
   }
 
-  async narrate(evidencePackage: ProductEvidencePackage): Promise<unknown> {
+  async narrate(
+    evidencePackage: ProductEvidencePackage,
+    userQuestion?: string,
+    analyticalIntent?: AnalyticalIntent,
+  ): Promise<unknown> {
     if (this.failuresRemaining > 0) {
       this.failuresRemaining--;
       throw new AiProviderError(this.name, "injected failure for testing");
@@ -63,7 +71,54 @@ export class MockAiProvider implements AiProvider {
     // narrator.ts's citation-*relevance* check (not just ID-existence) —
     // this is what Step 10 of Phase 4.1 found real Gemini output fails to do
     // on its own; the mock is deliberately built to always get it right.
+    // Phase 10 query-understanding correction, item 4 — RECOMMENDATION gets a
+    // real, distinct response construction: prefer the semantic-analysis
+    // discovered aspect (real customer-voiced text, not a fixed-vocabulary
+    // label) when available, and lead `summary` with the recommended action,
+    // not with reviewCount/averageRating statistics.
+    const semanticAnalysis = (evidencePackage as any).semanticAnalysis;
+    const topSemanticAspect = semanticAnalysis?.aspects?.[0];
     const topNegative = evidencePackage.topNegativeThemes[0];
+
+    if (analyticalIntent === AnalyticalIntent.RECOMMENDATION) {
+      const aspectName = topSemanticAspect?.aspect ?? topNegative?.theme;
+      const aspectCount = topSemanticAspect?.count ?? topNegative?.count ?? 0;
+      const groundedForRecommendation = aspectName
+        ? evidencePackage.evidenceReviewIds
+            .filter((id) => (evidencePackage.reviewThemes[id] ?? []).includes(aspectName))
+            .slice(0, 3)
+        : [];
+
+      if (aspectName && groundedForRecommendation.length > 0) {
+        return {
+          summary:
+            `Customers report ${aspectName} as a recurring concern (${aspectCount} review(s)). ` +
+            `Recommended action: prioritize fixing ${aspectName} before other changes, since it is the most evidence-supported complaint in this window.`,
+          rootCause: [
+            {
+              theme: aspectName,
+              explanation: `Reviews indicate ${aspectName} concerns appear in ${aspectCount} of the analyzed reviews.`,
+              evidenceReviewIds: groundedForRecommendation,
+            },
+          ],
+          recommendations: [
+            {
+              reason: `Address ${aspectName} directly — this is the dominant, evidence-grounded customer complaint.`,
+              evidenceReviewIds: groundedForRecommendation,
+              confidence: 0.75,
+              theme: aspectName,
+            },
+          ],
+        };
+      }
+
+      return {
+        summary: "No evidence-grounded complaint theme was found to base a specific recommendation on in this window.",
+        rootCause: [],
+        recommendations: [],
+      };
+    }
+
     const groundedIds = topNegative
       ? evidencePackage.evidenceReviewIds.filter((id) => (evidencePackage.reviewThemes[id] ?? []).includes(topNegative.theme)).slice(0, 3)
       : [];
@@ -92,6 +147,194 @@ export class MockAiProvider implements AiProvider {
             },
           ]
         : [],
+    };
+  }
+
+  /**
+   * Phase 10 semantic-query-understanding — best-effort mock resolver, for
+   * DETERMINISTIC-PIPELINE unit tests only (schema validation, timeframe-
+   * descriptor -> DateWindow conversion, fallback-triggering, downstream
+   * data execution given a FIXED resolved query). This delegates to the
+   * SAME deterministic regex resolver (queryResolution.ts's resolveQuery())
+   * that the real LLM path falls back to — it is not an independent
+   * semantic model, and by construction cannot prove generalization to a
+   * paraphrase its own rules don't already cover. It exists only so
+   * MockAiProvider satisfies the AiProvider interface and the deterministic
+   * parts of the pipeline can be unit-tested without a network call. Real
+   * semantic-generalization proof requires the real provider — see
+   * tests/real-provider/semanticQueryUnderstanding.real.test.ts.
+   */
+  async resolveQuery(input: QueryResolutionInput): Promise<unknown> {
+    if (this.failuresRemaining > 0) {
+      this.failuresRemaining--;
+      throw new AiProviderError(this.name, "injected failure for testing");
+    }
+
+    const lastAction = input.conversationContext.lastAction as QueryAction | null;
+    const priorContext = lastAction
+      ? {
+          intent: actionToIntent(lastAction) ?? AnalyticalIntent.STATS_QUERY,
+          aspect: input.conversationContext.lastAspect ?? undefined,
+          reviewIds: input.conversationContext.lastReviewIds ?? undefined,
+        }
+      : undefined;
+
+    const rq = resolveQuery(input.userQuestion, priorContext);
+
+    return {
+      action: rq.action,
+      // Round-tripped as ABSOLUTE start/end regardless of the deterministic
+      // resolver's original type — customWindow() just validates and
+      // returns {start, end}, so this reproduces the exact same window
+      // without needing to re-derive a NAMED `name` the schema would
+      // otherwise lose (e.g. "last week"/"this month").
+      timeframeDescriptor: rq.timeframe
+        ? { type: "ABSOLUTE", start: rq.timeframe.window.start, end: rq.timeframe.window.end }
+        : { type: "NONE" },
+      sentiment: rq.sentiment,
+      quantity: rq.quantity,
+      aspect: rq.aspect,
+      contextReference: rq.contextReference,
+      responseStyle: rq.responseStyle,
+      reasoning: "mock-provider: delegated to the deterministic regex resolver (not semantic understanding)",
+    };
+  }
+
+  async analyzeReviewBatch(reviews: ReviewWithText[], prompt: string): Promise<unknown> {
+    // Deterministic mock batch analysis
+    if (this.failuresRemaining > 0) {
+      this.failuresRemaining--;
+      throw new AiProviderError(this.name, "injected failure for testing");
+    }
+
+    // Mock semantic analysis: identify aspects based on keywords
+    return reviews.map((review) => ({
+      canonicalReviewId: review.canonical_review_id,
+      observations:
+        review.review_text && review.review_text.length > 0
+          ? [
+              {
+                aspect: review.rating <= 2 ? "quality_issue" : "positive_feature",
+                sentiment: review.rating <= 2 ? "negative" : "positive",
+                textSnippet: review.review_text.slice(0, 50),
+                confidence: 0.8,
+                sourceModel: "mock-v1",
+              },
+            ]
+          : [],
+    }));
+  }
+
+  /**
+   * Phase 10 PHASE B mock — deterministic operation planner for tests.
+   * Creates simple plans for common patterns using the existing deterministic
+   * resolver as a guide. This is NOT semantic AI — it's a rule-based dispatcher
+   * like queryResolution.ts, intended only for unit test stability.
+   * Real semantic proof requires real provider — see real-provider tests.
+   */
+  async planOperations(input: PlannerInput): Promise<unknown> {
+    if (this.failuresRemaining > 0) {
+      this.failuresRemaining--;
+      throw new AiProviderError(this.name, "injected failure for testing");
+    }
+
+    const q = input.userQuestion.toLowerCase();
+
+    // Simple pattern matching for deterministic mock plans
+    // (Real planner uses semantic understanding; this is just for test scaffolding)
+
+    // Pattern: retrieval + analysis (e.g., "show me bad reviews and tell me what's wrong")
+    if ((q.includes("show") || q.includes("get")) && (q.includes("tell") || q.includes("what"))) {
+      const sentiment = q.includes("bad") || q.includes("negative") ? "negative" : q.includes("good") ? "positive" : undefined;
+      const params0: any = {
+        timeframeDescriptor: { type: "NAMED", name: "7d" },
+      };
+      const params1: any = {};
+      if (sentiment) {
+        params0.sentiment = sentiment;
+        params1.sentiment = sentiment;
+      }
+      return {
+        goal: "Retrieve reviews and analyze them",
+        operations: [
+          {
+            id: "op_0",
+            type: "RETRIEVE_REVIEWS",
+            params: params0,
+          },
+          {
+            id: "op_1",
+            type: "ANALYZE_REVIEW_SET",
+            params: params1,
+            dependsOn: "op_0",
+          },
+        ],
+        resultOperationId: "op_1",
+        contextReference: false,
+        confidence: "high",
+        reasoning: "Mock planner: matched retrieval+analysis pattern",
+      };
+    }
+
+    // Pattern: simple retrieval (e.g., "show me reviews", "latest reviews")
+    if (q.includes("show") || q.includes("get") || q.includes("latest") || q.includes("reviews")) {
+      const sentiment = q.includes("bad") ? "negative" : q.includes("good") ? "positive" : undefined;
+      const params: any = {
+        timeframeDescriptor: { type: "NAMED", name: "7d" },
+      };
+      if (sentiment) {
+        params.sentiment = sentiment;
+      }
+      return {
+        goal: "Retrieve reviews",
+        operations: [
+          {
+            id: "op_0",
+            type: "RETRIEVE_REVIEWS",
+            params,
+          },
+        ],
+        resultOperationId: "op_0",
+        contextReference: false,
+        confidence: "high",
+        reasoning: "Mock planner: matched retrieval pattern",
+      };
+    }
+
+    // Pattern: analysis only (e.g., "what's wrong", "biggest issue", "why")
+    if (q.includes("what") || q.includes("why") || q.includes("problem") || q.includes("issue") || q.includes("complaint")) {
+      return {
+        goal: "Analyze reviews",
+        operations: [
+          {
+            id: "op_0",
+            type: "ANALYZE_REVIEW_SET",
+            params: {},
+          },
+        ],
+        resultOperationId: "op_0",
+        contextReference: false,
+        confidence: "medium",
+        reasoning: "Mock planner: matched analysis pattern",
+      };
+    }
+
+    // Fallback: general assessment
+    return {
+      goal: input.userQuestion,
+      operations: [
+        {
+          id: "op_0",
+          type: "GENERAL_ASSESSMENT",
+          params: {
+            timeframeDescriptor: { type: "NAMED", name: "7d" },
+          },
+        },
+      ],
+      resultOperationId: "op_0",
+      contextReference: false,
+      confidence: "low",
+      reasoning: "Mock planner: fallback to general assessment",
     };
   }
 }

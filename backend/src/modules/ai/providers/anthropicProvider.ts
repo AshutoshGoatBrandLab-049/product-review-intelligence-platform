@@ -7,10 +7,15 @@ import Anthropic, {
   APIError,
 } from "@anthropic-ai/sdk";
 import { AiProviderError, type AiFailureCategory, type AiProvider } from "./aiProvider.js";
-import type { AiAnalysisInput } from "../types.js";
+import type { AiAnalysisInput, ReviewWithText } from "../types.js";
 import type { ProductEvidencePackage } from "../evidencePackage.js";
 import { CITABLE_METRIC_FIELDS } from "../narrator.js";
 import { THEME_VOCABULARY } from "../../../database/appStore/models/reviewTheme.js";
+import type { AnalyticalIntent } from "../intentDetection.js";
+import { describeIntent, recommendationInstructionLine } from "../intentDetection.js";
+import { QUERY_ACTIONS } from "../queryResolution.js";
+import type { QueryResolutionInput } from "../queryUnderstanding.js";
+import { QUERY_RESOLUTION_SYSTEM_PROMPT } from "./queryResolutionPrompt.js";
 
 /**
  * Phase 4.1 remediation item 2 — mirrors geminiProvider.ts's classifier,
@@ -115,7 +120,10 @@ const NARRATOR_TOOL = {
         items: {
           type: "object",
           properties: {
-            theme: { type: "string", enum: [...THEME_VOCABULARY] },
+            // Phase 10 AI Product Analyst intent/context correction — relaxed
+            // from a fixed enum so a genuinely-discovered aspect can be
+            // named; re-validated deterministically in narrator.ts.
+            theme: { type: "string", maxLength: 80 },
             explanation: { type: "string", maxLength: 500 },
             evidenceReviewIds: { type: "array", maxItems: 10, items: { type: "string" } },
           },
@@ -134,13 +142,58 @@ const NARRATOR_TOOL = {
             // Phase 4.1 remediation item 1 — set when tied to a specific
             // theme, so its citations get the same relevance check as
             // rootCause. Omit for a general recommendation.
-            theme: { type: "string", enum: [...THEME_VOCABULARY] },
+            theme: { type: "string", maxLength: 80 },
           },
           required: ["reason", "evidenceReviewIds", "confidence"],
         },
       },
     },
     required: ["summary", "rootCause", "recommendations"],
+  },
+};
+
+/**
+ * Phase 10 semantic-query-understanding — mirrors openaiProvider.ts's
+ * QUERY_RESOLUTION_TOOL exactly, adapted to Anthropic's tool input_schema
+ * shape. Same closed action enum, same source of truth (QUERY_ACTIONS).
+ */
+const QUERY_RESOLUTION_TOOL = {
+  name: "record_query_resolution",
+  description:
+    "Resolves a user's natural-language question about a product's customer reviews into a structured backend operation. Never answers the question directly — only classifies WHICH closed action bucket it belongs to and extracts structural parameters (timeframe, sentiment, quantity, aspect).",
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      action: { type: "string", enum: [...QUERY_ACTIONS] },
+      timeframeDescriptor: {
+        type: "object",
+        description:
+          "A SEMANTIC description of the timeframe the user meant — never a computed date. Use type NONE when no concrete timeframe was expressed.",
+        properties: {
+          type: { type: "string", enum: ["RELATIVE", "ABSOLUTE", "NAMED", "NONE"] },
+          value: { type: ["number", "null"], description: "For RELATIVE only, e.g. 5 for 'last 5 days'." },
+          unit: { type: ["string", "null"], enum: ["day", "week", "month", "year", null] },
+          start: { type: ["string", "null"], description: "ISO date YYYY-MM-DD, for ABSOLUTE only." },
+          end: { type: ["string", "null"], description: "ISO date YYYY-MM-DD, for ABSOLUTE only." },
+          name: {
+            type: ["string", "null"],
+            description: "For NAMED only: one of yesterday, today, last_week, this_month, last_month.",
+          },
+        },
+        required: ["type"],
+      },
+      sentiment: { type: ["string", "null"], enum: ["positive", "negative", "neutral", null] },
+      quantity: { type: ["number", "null"], description: "How many reviews were requested, if a count was named." },
+      aspect: { type: ["string", "null"], maxLength: 80, description: "A specific product aspect/theme mentioned or implied, if any." },
+      contextReference: {
+        type: "boolean",
+        description:
+          "True if this question uses a pronoun or implicit reference ('it', 'that', 'those', 'them', 'show me', bare 'why?') that depends on the supplied conversationContext to resolve.",
+      },
+      responseStyle: { type: "string", enum: ["CONCISE", "DETAILED", "DEFAULT"] },
+      reasoning: { type: "string", maxLength: 500, description: "Brief internal reasoning for debugging/logging only — never shown to the user." },
+    },
+    required: ["action", "timeframeDescriptor", "sentiment", "quantity", "aspect", "contextReference", "responseStyle", "reasoning"],
   },
 };
 
@@ -197,8 +250,22 @@ export class AnthropicProvider implements AiProvider {
     }
   }
 
-  async narrate(evidencePackage: ProductEvidencePackage): Promise<unknown> {
+  async narrate(
+    evidencePackage: ProductEvidencePackage,
+    userQuestion?: string,
+    analyticalIntent?: AnalyticalIntent,
+  ): Promise<unknown> {
     try {
+      // Build context from question and intent (Phase 10 Step 3)
+      let contextLine = "Explain the following product review evidence.";
+      if (userQuestion) {
+        contextLine = `Answer the following question based on the product review evidence: "${userQuestion}"`;
+      }
+      if (analyticalIntent) {
+        contextLine += ` Focus on: ${describeIntent(analyticalIntent)}.`;
+        contextLine += recommendationInstructionLine(analyticalIntent);
+      }
+
       const message = await this.client.messages.create({
         model: this.model,
         max_tokens: 1536,
@@ -210,7 +277,7 @@ export class AnthropicProvider implements AiProvider {
             // Only the validated evidence package is sent — never raw
             // reviews, never other products' data, never credentials.
             content:
-              `Explain the following product review evidence. Use language like ` +
+              `${contextLine} Use language like ` +
               `"Reviews indicate..." or "Among the analyzed reviews...". Never claim ` +
               `sales causality reviews alone cannot prove. Every root-cause and ` +
               `recommendation must cite canonical_review_id values ONLY from the ` +
@@ -228,6 +295,60 @@ export class AnthropicProvider implements AiProvider {
               `tie to one of these fields should not be stated as a specific evidence-derived ` +
               `figure at all.\n\n` +
               JSON.stringify(evidencePackage, null, 2),
+          },
+        ],
+      });
+
+      const toolUse = message.content.find((block) => block.type === "tool_use");
+      if (!toolUse || toolUse.type !== "tool_use") {
+        throw new AiProviderError(this.name, "model did not return a tool_use block");
+      }
+      return toolUse.input;
+    } catch (err) {
+      if (err instanceof AiProviderError) throw err;
+      const classified = classifyAnthropicError(err);
+      throw new AiProviderError(this.name, classified.message, {
+        retryable: classified.retryable,
+        retryAfterMs: classified.retryAfterMs,
+        category: classified.category,
+      });
+    }
+  }
+
+  async analyzeReviewBatch(reviews: ReviewWithText[], prompt: string): Promise<unknown> {
+    // Phase 10 Step 3: Anthropic batch analysis stub
+    // OpenAI is the active provider; this stub ensures interface compliance
+    throw new AiProviderError(this.name, "analyzeReviewBatch not implemented for Anthropic provider");
+  }
+
+  /**
+   * Phase 10 semantic-query-understanding — real implementation (not a
+   * stub), mirroring narrate()'s tool-use pattern exactly. Code-complete but
+   * NOT exercised by execution in this environment: no ANTHROPIC_API_KEY is
+   * configured here (same caveat already documented above for
+   * analyzeReview/narrate) — flagged explicitly in the phase report rather
+   * than claimed as tested.
+   */
+  async resolveQuery(input: QueryResolutionInput): Promise<unknown> {
+    try {
+      const message = await this.client.messages.create({
+        model: this.model,
+        max_tokens: 500,
+        tools: [QUERY_RESOLUTION_TOOL],
+        tool_choice: { type: "tool", name: QUERY_RESOLUTION_TOOL.name },
+        system: QUERY_RESOLUTION_SYSTEM_PROMPT,
+        messages: [
+          {
+            role: "user",
+            content: JSON.stringify(
+              {
+                userQuestion: input.userQuestion,
+                conversationContext: input.conversationContext,
+                productContext: input.productContext,
+              },
+              null,
+              2,
+            ),
           },
         ],
       });

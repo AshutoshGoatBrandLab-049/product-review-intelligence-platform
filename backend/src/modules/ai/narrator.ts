@@ -2,6 +2,8 @@ import { z } from "zod";
 import { THEME_VOCABULARY } from "../../database/appStore/models/reviewTheme.js";
 import type { ProductEvidencePackage } from "./evidencePackage.js";
 import type { AiProvider } from "./providers/aiProvider.js";
+import type { AnalyticalIntent } from "./intentDetection.js";
+import type { SemanticAspectData } from "./types.js";
 
 /**
  * Phase 4.1 remediation (numerical-claim grounding) — the exact scalar
@@ -43,7 +45,14 @@ const NarratorOutputSchema = z.object({
   rootCause: z
     .array(
       z.object({
-        theme: z.enum(THEME_VOCABULARY),
+        // Phase 10 AI Product Analyst intent/context correction — relaxed
+        // from z.enum(THEME_VOCABULARY) to a bounded free string so a
+        // genuinely-discovered semantic aspect (e.g. "zip broke", "battery
+        // dies quickly") can be NAMED as the root cause, not just cited
+        // under a mislabeled fixed theme. Deterministically re-validated
+        // below (against THEME_VOCABULARY ∪ discovered aspects) — never
+        // trusted as-is; an arbitrary invented string is still rejected.
+        theme: z.string().min(1).max(80),
         explanation: z.string().min(1).max(500),
         evidenceReviewIds: z.array(z.string()).max(10),
       }),
@@ -59,7 +68,7 @@ const NarratorOutputSchema = z.object({
         // specific theme gets the same deterministic relevance check as
         // rootCause; a recommendation with no theme (general advice) is
         // exempt from relevance filtering, still ID-existence checked only.
-        theme: z.enum(THEME_VOCABULARY).nullable().optional(),
+        theme: z.string().min(1).max(80).nullable().optional(),
       }),
     )
     .max(5),
@@ -129,6 +138,10 @@ export interface NarratorResult {
  * another model judging correctness. A mismatch or unknown field is
  * stripped into `ungroundedMetrics`, never silently trusted.
  *
+ * Phase 10 Step 3: userQuestion and analyticalIntent are optionally passed
+ * to the provider so it can contextualize responses (e.g., answer "What's
+ * the biggest issue?" differently than "What's the average rating?").
+ *
  * IMPORTANT, DISCLOSED BOUNDARY: this ONLY verifies numbers the narrator
  * chose to also place in `citedMetrics`. A number written ONLY in free-form
  * prose (`summary`/`explanation`/`reason`), with no corresponding
@@ -144,11 +157,28 @@ export interface NarratorResult {
 export async function narrateProductEvidence(
   evidencePackage: ProductEvidencePackage,
   provider: AiProvider,
+  userQuestion?: string,
+  analyticalIntent?: AnalyticalIntent,
 ): Promise<NarratorResult> {
-  const raw = await provider.narrate(evidencePackage);
+  const raw = await provider.narrate(evidencePackage, userQuestion, analyticalIntent);
   const parsed = NarratorOutputSchema.safeParse(raw);
   if (!parsed.success) {
     throw new Error(`Narrator output failed schema validation: ${parsed.error.issues.map((i) => i.message).join("; ")}`);
+  }
+
+  // Phase 10 Step 3: Augment reviewThemes with semantic analysis results
+  // so that semantic-discovered aspects pass Phase 4.1 validation
+  const augmentedReviewThemes = { ...evidencePackage.reviewThemes };
+  const semanticAnalysis = (evidencePackage as any).semanticAnalysis;
+  if (semanticAnalysis && semanticAnalysis.aspects) {
+    for (const aspect of semanticAnalysis.aspects) {
+      for (const reviewId of aspect.reviewIds) {
+        augmentedReviewThemes[reviewId] ??= [];
+        if (!augmentedReviewThemes[reviewId].includes(aspect.aspect)) {
+          augmentedReviewThemes[reviewId].push(aspect.aspect);
+        }
+      }
+    }
   }
 
   const validIds = new Set(evidencePackage.evidenceReviewIds);
@@ -169,10 +199,13 @@ export async function narrateProductEvidence(
    * claimed theme is exactly the Step 10 failure mode (real Gemini output,
    * zero theme evidence, confident attribution anyway) — stripped here, never
    * asked of another model to judge ("do not solve this by asking Gemini").
+   *
+   * Phase 10 Step 3: Now also includes semantic-discovered aspects, so that
+   * semantic analysis results are trusted and not filtered out.
    */
   function filterRelevant(ids: string[], theme: string): string[] {
     return ids.filter((id) => {
-      if ((evidencePackage.reviewThemes[id] ?? []).includes(theme)) return true;
+      if ((augmentedReviewThemes[id] ?? []).includes(theme)) return true;
       irrelevantCitations.push(id);
       return false;
     });
@@ -180,9 +213,41 @@ export async function narrateProductEvidence(
 
   let droppedUnsupportedClaims = 0;
 
+  // Phase 10 AI Product Analyst intent/context correction — deterministic
+  // theme-name validation. Now that `theme` is a bounded string rather than
+  // a hard enum, the model is structurally able to name a discovered aspect
+  // — but it is NOT trusted to invent an arbitrary string. A theme is only
+  // accepted if it is either one of the fixed THEME_VOCABULARY values or a
+  // name the backend's own semantic-analysis pass actually discovered for
+  // THIS product/window (never another model judging plausibility).
+  const knownThemes = new Set<string>(THEME_VOCABULARY as readonly string[]);
+  const discoveredAspects: SemanticAspectData[] = semanticAnalysis?.aspects ?? [];
+  const discoveredAspectNames = new Map<string, string>();
+  for (const aspect of discoveredAspects) {
+    discoveredAspectNames.set(aspect.aspect.toLowerCase(), aspect.aspect);
+  }
+  function validateThemeName(theme: string): string | null {
+    if (knownThemes.has(theme)) return theme;
+    const discovered = discoveredAspectNames.get(theme.toLowerCase());
+    if (discovered) return discovered;
+    return null;
+  }
+
   const rootCause = parsed.data.rootCause
-    .map((rc) => ({ ...rc, evidenceReviewIds: filterRelevant(filterIds(rc.evidenceReviewIds), rc.theme) }))
-    .filter((rc) => {
+    .map((rc) => {
+      const validatedTheme = validateThemeName(rc.theme);
+      if (!validatedTheme) return null;
+      return {
+        ...rc,
+        theme: validatedTheme,
+        evidenceReviewIds: filterRelevant(filterIds(rc.evidenceReviewIds), validatedTheme),
+      };
+    })
+    .filter((rc): rc is NonNullable<typeof rc> => {
+      if (!rc) {
+        droppedUnsupportedClaims++;
+        return false;
+      }
       if (rc.evidenceReviewIds.length > 0) return true;
       droppedUnsupportedClaims++;
       return false;
@@ -190,9 +255,13 @@ export async function narrateProductEvidence(
 
   const recommendations = parsed.data.recommendations
     .map((r) => {
+      const validatedTheme = r.theme ? validateThemeName(r.theme) : null;
       const idChecked = filterIds(r.evidenceReviewIds);
-      const evidenceReviewIds = r.theme ? filterRelevant(idChecked, r.theme) : idChecked;
-      return { ...r, evidenceReviewIds };
+      const evidenceReviewIds = validatedTheme ? filterRelevant(idChecked, validatedTheme) : idChecked;
+      // An invented (unvalidatable) theme is stripped to null rather than
+      // trusted — falls back to "general advice" treatment (ID-existence
+      // checked only, no relevance filter tied to a fabricated theme name).
+      return { ...r, theme: validatedTheme, evidenceReviewIds };
     })
     .filter((r) => {
       if (r.evidenceReviewIds.length > 0) return true;

@@ -15,14 +15,12 @@ yarn.lock
 dist/
 build/
 *.tsbuildinfo
-out/
 
 # Testing
 coverage/
 .nyc_output/
 *.lcov
 .jest-cache/
-.vitest/
 
 # Logs
 logs/
@@ -57,17 +55,14 @@ pids/
 *.tmp
 *.temp
 .cache/
-.parcel-cache/
 dist-ssr/
 *.local
 
-# React/Vue specific
-.react/
-.vue/
-
-# Vite specific
-.vite/
-vite-dist/
+# Database
+*.db
+*.sqlite
+*.sqlite3
+database.db
 
 # Sensitive files (CRITICAL - DO NOT COMMIT)
 *.key
@@ -89,19 +84,10 @@ auth_tokens.json
 uploads/
 temp/
 tmp/
-public/uploads/
 
-# Generated files
-*.generated.ts
-*.generated.js
-
-# Lock files (choose one strategy)
-# package-lock.json
-# yarn.lock
-
-# Next.js specific (if applicable)
-.next/
-.vercel/
+# Vitest/Jest cache
+.vitest/
+.jest/
 
 # Node
 .node_modules/

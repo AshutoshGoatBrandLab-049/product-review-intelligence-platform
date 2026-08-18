@@ -20,12 +20,15 @@ const KNOWN_ROLES: Role[] = ["admin", "analyst", "viewer"];
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const state = useMemo<AuthState>(() => {
-    if (!env.devToken) {
+    // Check env first, then localStorage (dev server fallback)
+    const token = env.devToken || (typeof window !== "undefined" ? localStorage.getItem("authToken") : null);
+
+    if (!token) {
       setAuthToken(undefined);
       return { isConfigured: false, role: null, subject: null };
     }
 
-    const payload = decodeJwtPayload(env.devToken);
+    const payload = decodeJwtPayload(token);
     if (!payload || isTokenExpired(payload) || !payload.role || !KNOWN_ROLES.includes(payload.role as Role)) {
       // Malformed/expired/unrecognized-role token — treated the same as
       // "not configured" so the UI shows one honest setup screen rather
@@ -35,7 +38,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return { isConfigured: false, role: null, subject: null };
     }
 
-    setAuthToken(env.devToken);
+    setAuthToken(token);
     return { isConfigured: true, role: payload.role as Role, subject: payload.sub ?? null };
   }, []);
 

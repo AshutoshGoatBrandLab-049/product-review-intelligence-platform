@@ -8,6 +8,15 @@ export interface ConversationMessage {
   content: string;
   timestamp: string;
   analysis?: NarratorResult;
+  /**
+   * Phase 10 AI Product Analyst intent/context correction — additive
+   * metadata (JSONB column, no migration) so the NEXT turn can resolve
+   * ambiguous/anaphoric follow-ups ("show me", "show those", "why?")
+   * against real prior state instead of reclassifying blind.
+   */
+  intent?: string;
+  aspect?: string;
+  reviewIds?: string[];
 }
 
 export class AiConversation extends Model<InferAttributes<AiConversation>, InferCreationAttributes<AiConversation>> {

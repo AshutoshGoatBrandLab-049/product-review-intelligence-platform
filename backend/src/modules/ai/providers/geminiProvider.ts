@@ -1,9 +1,14 @@
 import { GoogleGenAI, Type, ApiError } from "@google/genai";
 import { AiProviderError, type AiFailureCategory, type AiProvider } from "./aiProvider.js";
-import type { AiAnalysisInput } from "../types.js";
+import type { AiAnalysisInput, ReviewWithText } from "../types.js";
 import type { ProductEvidencePackage } from "../evidencePackage.js";
 import { CITABLE_METRIC_FIELDS } from "../narrator.js";
 import { THEME_VOCABULARY } from "../../../database/appStore/models/reviewTheme.js";
+import type { AnalyticalIntent } from "../intentDetection.js";
+import { describeIntent, recommendationInstructionLine } from "../intentDetection.js";
+import { QUERY_ACTIONS } from "../queryResolution.js";
+import type { QueryResolutionInput } from "../queryUnderstanding.js";
+import { QUERY_RESOLUTION_SYSTEM_PROMPT } from "./queryResolutionPrompt.js";
 
 interface GeminiErrorBody {
   error?: {
@@ -130,7 +135,10 @@ export const NARRATOR_RESPONSE_SCHEMA = {
       items: {
         type: Type.OBJECT,
         properties: {
-          theme: { type: Type.STRING, enum: [...THEME_VOCABULARY] },
+          // Phase 10 AI Product Analyst intent/context correction — relaxed
+          // from a fixed enum so a genuinely-discovered aspect can be named;
+          // re-validated deterministically in narrator.ts, never trusted raw.
+          theme: { type: Type.STRING, maxLength: 80 },
           explanation: { type: Type.STRING },
           evidenceReviewIds: { type: Type.ARRAY, items: { type: Type.STRING } },
         },
@@ -149,7 +157,7 @@ export const NARRATOR_RESPONSE_SCHEMA = {
           // addresses a specific theme, so its citations get the same
           // deterministic relevance check rootCause citations get. Omit/null
           // for a general recommendation not tied to one theme.
-          theme: { type: Type.STRING, enum: [...THEME_VOCABULARY], nullable: true },
+          theme: { type: Type.STRING, maxLength: 80, nullable: true },
         },
         required: ["reason", "evidenceReviewIds", "confidence"],
       },
@@ -157,6 +165,40 @@ export const NARRATOR_RESPONSE_SCHEMA = {
   },
   required: ["summary", "rootCause", "recommendations"],
 };
+
+/**
+ * Phase 10 semantic-query-understanding — mirrors openaiProvider.ts's
+ * QUERY_RESOLUTION_TOOL exactly, adapted to Gemini's Type-based
+ * responseSchema shape. Same closed action enum, same source of truth
+ * (QUERY_ACTIONS).
+ */
+export const QUERY_RESOLUTION_RESPONSE_SCHEMA = {
+  type: Type.OBJECT,
+  properties: {
+    action: { type: Type.STRING, enum: [...QUERY_ACTIONS] },
+    timeframeDescriptor: {
+      type: Type.OBJECT,
+      properties: {
+        type: { type: Type.STRING, enum: ["RELATIVE", "ABSOLUTE", "NAMED", "NONE"] },
+        value: { type: Type.NUMBER, nullable: true },
+        unit: { type: Type.STRING, enum: ["day", "week", "month", "year"], nullable: true },
+        start: { type: Type.STRING, nullable: true },
+        end: { type: Type.STRING, nullable: true },
+        name: { type: Type.STRING, nullable: true },
+      },
+      required: ["type"],
+    },
+    sentiment: { type: Type.STRING, enum: ["positive", "negative", "neutral"], nullable: true },
+    quantity: { type: Type.NUMBER, nullable: true },
+    aspect: { type: Type.STRING, maxLength: 80, nullable: true },
+    contextReference: { type: Type.BOOLEAN },
+    responseStyle: { type: Type.STRING, enum: ["CONCISE", "DETAILED", "DEFAULT"] },
+    reasoning: { type: Type.STRING, maxLength: 500 },
+  },
+  required: ["action", "timeframeDescriptor", "sentiment", "quantity", "aspect", "contextReference", "responseStyle", "reasoning"],
+};
+
+const QUERY_RESOLUTION_PREFIX = QUERY_RESOLUTION_SYSTEM_PROMPT + "\n\n";
 
 export class GeminiProvider implements AiProvider {
   readonly name = "gemini";
@@ -204,12 +246,26 @@ export class GeminiProvider implements AiProvider {
     }
   }
 
-  async narrate(evidencePackage: ProductEvidencePackage): Promise<unknown> {
+  async narrate(
+    evidencePackage: ProductEvidencePackage,
+    userQuestion?: string,
+    analyticalIntent?: AnalyticalIntent,
+  ): Promise<unknown> {
     try {
+      // Build context from question and intent (Phase 10 Step 3)
+      let contextLine = "Explain the following product review evidence.";
+      if (userQuestion) {
+        contextLine = `Answer the following question based on the product review evidence: "${userQuestion}"`;
+      }
+      if (analyticalIntent) {
+        contextLine += ` Focus on: ${describeIntent(analyticalIntent)}.`;
+        contextLine += recommendationInstructionLine(analyticalIntent);
+      }
+
       const response = await this.client.models.generateContent({
         model: this.model,
         contents:
-          `Explain the following product review evidence. Use language like ` +
+          `${contextLine} Use language like ` +
           `"Reviews indicate..." or "Among the analyzed reviews...". Never claim ` +
           `sales causality reviews alone cannot prove. Every root-cause and ` +
           `recommendation must cite canonical_review_id values ONLY from the ` +
@@ -230,6 +286,56 @@ export class GeminiProvider implements AiProvider {
         config: {
           responseMimeType: "application/json",
           responseSchema: NARRATOR_RESPONSE_SCHEMA,
+        },
+      });
+
+      const text = response.text;
+      if (!text) {
+        throw new AiProviderError(this.name, "model returned no text content");
+      }
+      return JSON.parse(text);
+    } catch (err) {
+      if (err instanceof AiProviderError) throw err;
+      const classified = classifyGeminiError(err);
+      throw new AiProviderError(this.name, classified.message, {
+        retryable: classified.retryable,
+        retryAfterMs: classified.retryAfterMs,
+        category: classified.category,
+      });
+    }
+  }
+
+  async analyzeReviewBatch(reviews: ReviewWithText[], prompt: string): Promise<unknown> {
+    // Phase 10 Step 3: Gemini batch analysis stub
+    // OpenAI is the active provider; this stub ensures interface compliance
+    throw new AiProviderError(this.name, "analyzeReviewBatch not implemented for Gemini provider");
+  }
+
+  /**
+   * Phase 10 semantic-query-understanding — real implementation (not a
+   * stub), mirroring narrate()'s native JSON-mode pattern exactly. Code-
+   * complete but NOT exercised by execution in this environment: no
+   * GEMINI_API_KEY is configured here — flagged explicitly in the phase
+   * report rather than claimed as tested.
+   */
+  async resolveQuery(input: QueryResolutionInput): Promise<unknown> {
+    try {
+      const response = await this.client.models.generateContent({
+        model: this.model,
+        contents:
+          QUERY_RESOLUTION_PREFIX +
+          JSON.stringify(
+            {
+              userQuestion: input.userQuestion,
+              conversationContext: input.conversationContext,
+              productContext: input.productContext,
+            },
+            null,
+            2,
+          ),
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: QUERY_RESOLUTION_RESPONSE_SCHEMA,
         },
       });
 

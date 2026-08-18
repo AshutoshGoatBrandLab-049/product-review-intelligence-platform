@@ -59,6 +59,10 @@ export const EvidenceReviewsQuerySchema = z.object({
 export const AnalystQuerySchema = z.object({
   question: z.string().min(1).max(500),
   window: NamedWindowSchema.optional(),
+  // Phase 10 AI Product Analyst intent/context correction — optional
+  // conversation to load prior-turn context from, for resolving ambiguous
+  // follow-ups ("show me", "why?"). Absence just means no context is used.
+  conversationId: z.string().trim().uuid().optional(),
 });
 
 export const ProductReviewsQuerySchema = z.object({
