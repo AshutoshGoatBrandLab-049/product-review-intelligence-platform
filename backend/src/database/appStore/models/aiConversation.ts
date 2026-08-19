@@ -23,8 +23,8 @@ export class AiConversation extends Model<InferAttributes<AiConversation>, Infer
   declare id: CreationOptional<string>;
   declare platform: "flipkart" | "myntra";
   declare sourceProductId: string;
-  declare windowStart: string;
-  declare windowEnd: string;
+  declare windowStart: string | null;
+  declare windowEnd: string | null;
   declare createdBy: string | null;
   declare messages: ConversationMessage[];
   declare createdAt: CreationOptional<Date>;
@@ -36,8 +36,8 @@ AiConversation.init(
     id: { type: DataTypes.UUIDV4, primaryKey: true, defaultValue: DataTypes.UUIDV4 },
     platform: { type: DataTypes.TEXT, allowNull: false },
     sourceProductId: { type: DataTypes.TEXT, allowNull: false, field: "source_product_id" },
-    windowStart: { type: DataTypes.DATEONLY, allowNull: false, field: "window_start" },
-    windowEnd: { type: DataTypes.DATEONLY, allowNull: false, field: "window_end" },
+    windowStart: { type: DataTypes.DATEONLY, allowNull: true, field: "window_start" },
+    windowEnd: { type: DataTypes.DATEONLY, allowNull: true, field: "window_end" },
     createdBy: { type: DataTypes.TEXT, allowNull: true, field: "created_by" },
     messages: { type: DataTypes.JSONB, allowNull: false, defaultValue: [] },
     createdAt: { type: DataTypes.DATE, allowNull: false, field: "created_at", defaultValue: DataTypes.NOW },

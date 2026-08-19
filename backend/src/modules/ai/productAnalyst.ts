@@ -3,7 +3,6 @@ import type { DateWindow, NamedWindow } from "../analytics/dateWindows.js";
 import { resolveNamedWindow } from "../analytics/dateWindows.js";
 import { buildProductEvidencePackage } from "./evidencePackage.js";
 import { narrateProductEvidence } from "./narrator.js";
-import { getCachedQuestion, cacheQuestion } from "./questionCache.js";
 import { appSequelize } from "../../database/appStore/client.js";
 import { config } from "../../config/index.js";
 import { QueryTypes } from "sequelize";
@@ -21,6 +20,7 @@ import {
   validateEvidenceReviewIds,
 } from "./deterministicEvidence.js";
 import { retrieveReviews, deriveReviewFiltersFromQuestion } from "../analytics/reviewRetrieval.js";
+import { getLatestNAverageRating } from "../../database/queries/productRankingQueries.js";
 import { getConversation, appendConversationMessage } from "./conversationStore.js";
 import type { ConversationMessage } from "../../database/appStore/models/aiConversation.js";
 import { planOperations } from "./semanticPlanner.js";
@@ -44,13 +44,32 @@ export interface ProductAnalystRequest {
   platform: Platform;
   sourceProductId: string;
   userQuestion: string;
-  window?: NamedWindow;
   /** Optional — when supplied, prior-turn context is loaded to resolve ambiguous follow-ups. */
   conversationId?: string;
 }
 
 const CLARIFICATION_PROMPT_FALLBACK =
   "What would you like me to show — the latest reviews, supporting evidence, or the product analysis?";
+
+/**
+ * Detect if the question asks for average rating based on latest N reviews (where N can be any number).
+ * Returns the number N, or null if not a latest-N-reviews-rating question.
+ * Examples: "latest 10 reviews", "last 20 reviews", "latest 100"
+ */
+function extractLatestNReviewsCount(question: string): number | null {
+  const lowerQ = question.toLowerCase();
+  const hasRatingCue = /average\s+rating|rating\s+average|what.{0,20}rating/.test(lowerQ);
+
+  if (!hasRatingCue) return null;
+
+  // Match "latest N", "last N", "most recent N" where N is a number
+  const match = lowerQ.match(/(?:latest|last|most\s+recent)\s+(\d+)/);
+  if (match && match[1]) {
+    return parseInt(match[1], 10);
+  }
+
+  return null;
+}
 
 /**
  * Detect what time window the user is asking about from their natural language question.
@@ -265,7 +284,7 @@ export async function analyzeProductQuestion(
   request: ProductAnalystRequest,
   aiProvider: AiProvider,
 ): Promise<ProductAnalystResponse> {
-  const namedWindowFallback = request.window ?? detectWindowFromQuestion(request.userQuestion);
+  const namedWindow = detectWindowFromQuestion(request.userQuestion);
 
   // Load prior-turn context, if a conversation was supplied.
   let priorContext: PriorTurnContext | undefined;
@@ -299,7 +318,7 @@ export async function analyzeProductQuestion(
   // A resolved concrete timeframe ("last 5 days") REPLACES the fixed-set
   // window entirely — this is what makes it a real, deterministic DateWindow
   // used to query normalized_reviews, not something the LLM approximates.
-  const window = resolvedQuery.timeframe?.window ?? resolveNamedWindow(namedWindowFallback);
+  const window = resolvedQuery.timeframe?.window ?? resolveNamedWindow(namedWindow);
 
   if (process.env.DEBUG_QUERY_RESOLUTION === "true") {
     console.log("[queryResolution]", JSON.stringify(debugResolvedQuery(resolvedQuery)));
@@ -323,41 +342,47 @@ export async function analyzeProductQuestion(
     return response;
   }
 
-  // Question cache: only used for context-FREE, freshly-classified turns.
-  // A context-resolved answer ("show me" after "why?") is conversation-
-  // specific and must never be served from a global product/window cache.
-  const cacheEligible = !resolved.resolvedFromContext;
-  if (cacheEligible) {
-    const cached = await getCachedQuestion(request.platform, request.sourceProductId, window, request.userQuestion);
-    if (cached) {
-      // Bug fix (found while validating context resolution end-to-end): a
-      // cache hit used to return immediately WITHOUT ever calling
-      // persistTurn() — so a conversation whose first question happened to
-      // already be cached (e.g. asked before, by anyone, against this
-      // product/window) silently lost all conversation state. The very next
-      // "show me"/"why?" follow-up would then find an empty message history
-      // and incorrectly ask for clarification instead of resolving against
-      // real prior context. Persisting here, reconstructed from the cached
-      // response, keeps that guarantee intact regardless of cache status.
-      const cachedAspect = cached.analysis?.rootCause?.[0]?.theme;
-      const cachedReviewIds = cached.reviews?.map((r) => r.canonicalReviewId) ?? cached.analysis?.rootCause?.[0]?.evidenceReviewIds;
-      await persistTurn(
-        request.conversationId,
-        request.userQuestion,
-        cached.answer,
-        resolvedQuery.intent,
-        cachedAspect,
-        cachedReviewIds,
-        cached.analysis,
-      );
-      return cached;
-    }
-  }
-
   // Verify product exists
   const exists = await verifyProductExists(request.platform, request.sourceProductId);
   if (!exists) {
     throw new Error(`Product not found: ${request.platform}/${request.sourceProductId}`);
+  }
+
+  // ---------- LATEST-N AVERAGE RATING: Direct query for "latest N reviews" rating requests (runs BEFORE planner) ----------
+  const latestNCount = extractLatestNReviewsCount(request.userQuestion);
+  if (latestNCount !== null) {
+    const { averageRating, reviewCount } = await getLatestNAverageRating(
+      request.platform,
+      request.sourceProductId,
+      latestNCount,
+    );
+
+    let answerText = "";
+    if (averageRating !== null) {
+      const ratingValue = typeof averageRating === "number"
+        ? averageRating
+        : parseFloat(String(averageRating)) || 0;
+      // If fewer reviews than requested, adjust message accordingly
+      const reviewsLabel = reviewCount < latestNCount ? `latest ${reviewCount}` : `latest ${latestNCount}`;
+      console.log(`[DEBUG] Latest-${latestNCount}: averageRating=${averageRating}, ratingValue=${ratingValue}, formatted=${ratingValue.toFixed(1)}`);
+      answerText = `Based on the ${reviewsLabel} reviews, the average rating is ${ratingValue.toFixed(1)} out of 5.`;
+    } else {
+      answerText = "This product has no reviews yet.";
+    }
+
+    const response: ProductAnalystResponse = {
+      platform: request.platform,
+      sourceProductId: request.sourceProductId,
+      window,
+      userQuestion: request.userQuestion,
+      answer: answerText,
+      analysis: null,
+      cacheHit: false,
+    };
+
+    await persistTurn(request.conversationId, request.userQuestion, answerText, AnalyticalIntent.STATS_QUERY, undefined, undefined, null);
+
+    return response;
   }
 
   // PHASE C: Try semantic planner first (but NOT for context-resolved follow-ups)
@@ -390,6 +415,10 @@ export async function analyzeProductQuestion(
         // Build response from execution results
         const finalResult = executionResult.finalResult;
         const answerText = buildAnswerFromOperationResult(finalResult, request.userQuestion);
+        const resultData = finalResult.result as any;
+
+        // For retrieval operations, analysis is null; for analysis operations, analysis contains the full result
+        const isRetrieval = finalResult.operationType === "RETRIEVE_REVIEWS";
 
         const response: ProductAnalystResponse = {
           platform: request.platform,
@@ -397,9 +426,13 @@ export async function analyzeProductQuestion(
           window,
           userQuestion: request.userQuestion,
           answer: answerText,
-          analysis: finalResult.result as any,
+          analysis: isRetrieval ? null : resultData,
           cacheHit: false,
-          reviews: (finalResult.result as any)?.reviews || null,
+          ...(isRetrieval ? {
+            reviews: resultData?.reviews || [],
+            totalMatchingCount: resultData?.count || 0,
+            requestedLimit: resultData?.limit,
+          } : {}),
         };
 
         // Persist the turn for conversation context
@@ -408,14 +441,10 @@ export async function analyzeProductQuestion(
           request.userQuestion,
           answerText,
           resolvedQuery.intent,
-          (finalResult.result as any)?.aspect,
+          resultData?.aspect,
           executionResult.allEvidenceReviewIds,
-          finalResult.result as any,
+          isRetrieval ? null : resultData,
         );
-
-        if (cacheEligible) {
-          await cacheQuestion(request.platform, request.sourceProductId, window, request.userQuestion, response);
-        }
 
         return response;
       }
@@ -440,7 +469,7 @@ export async function analyzeProductQuestion(
     // resolveQuery() above — a resolved timeframe here actually overrides the
     // window passed to retrieveReviews() instead of being invisible to it.
     const theme = derivedFilters.theme ?? resolvedQuery.filters.theme ?? (resolvedQuery.resolvedFromContext ? resolvedQuery.aspect ?? undefined : undefined);
-    const retrievalWindow = resolvedQuery.timeframe?.window ?? request.window ?? detectWindowFromQuestion(request.userQuestion);
+    const retrievalWindow = resolvedQuery.timeframe?.window ?? resolveNamedWindow(detectWindowFromQuestion(request.userQuestion));
 
     // A context-resolved follow-up ("show me" after an analysis turn) grounds
     // to the EXACT, already-validated review IDs the prior turn cited, not a
@@ -490,10 +519,6 @@ export async function analyzeProductQuestion(
       reviewIds,
       null,
     );
-
-    if (cacheEligible) {
-      await cacheQuestion(request.platform, request.sourceProductId, window, request.userQuestion, response);
-    }
 
     return response;
   }
@@ -664,12 +689,6 @@ export async function analyzeProductQuestion(
   };
 
   await persistTurn(request.conversationId, request.userQuestion, result.summary, intent, topAspect, topReviewIds, result);
-
-  // Cache the validated result (never raw model output) — only for
-  // context-free turns (see cacheEligible above).
-  if (cacheEligible) {
-    await cacheQuestion(request.platform, request.sourceProductId, window, request.userQuestion, response);
-  }
 
   return response;
 }

@@ -10,6 +10,9 @@ import { BrandComparison } from "@/pages/BrandComparison";
 import { ProductComparison } from "@/pages/ProductComparison";
 import { System } from "@/pages/System";
 import AIProductAnalyst from "@/pages/AIProductAnalyst";
+import { ReviewsOverview } from "@/pages/ReviewsOverview";
+import { MarketplaceReviews } from "@/pages/MarketplaceReviews";
+import { ProductRankingList } from "@/pages/ProductRankingList";
 import { RequireRole } from "./RequireRole";
 
 /**
@@ -35,6 +38,9 @@ export const routeConfig: RouteObject[] = [
       { path: "marketplace/brands", element: <BrandsIndex /> },
       { path: "marketplace/brands/:brand", element: <BrandComparison /> },
       { path: "marketplace/products/:familyId", element: <ProductComparison /> },
+      { path: "reviews-overview", element: <ReviewsOverview /> },
+      { path: "reviews-overview/:platform", element: <MarketplaceReviews /> },
+      { path: "reviews-overview/:platform/:type", element: <ProductRankingList /> },
       { path: "ai/analyst", element: <AIProductAnalyst /> },
       {
         path: "system",

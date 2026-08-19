@@ -41,7 +41,7 @@ export interface ProductAnalystResponse {
 
 export async function analyzeProduct(req: Request, res: Response): Promise<void> {
   const { platform, sourceProductId } = getValidatedParams<ProductParams>(req);
-  const { question, window, conversationId } = getValidatedQuery<AnalystQuery>(req);
+  const { question, conversationId } = getValidatedQuery<AnalystQuery>(req);
 
   const provider = createAiProvider();
   const result = await analyzeProductQuestion(
@@ -49,7 +49,6 @@ export async function analyzeProduct(req: Request, res: Response): Promise<void>
       platform,
       sourceProductId,
       userQuestion: question,
-      window,
       conversationId,
     },
     provider,

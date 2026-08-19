@@ -6,33 +6,31 @@ import type { Platform } from "../../types/unifiedReview.js";
 /**
  * Phase 10 Step 2 — Team-shared conversation persistence layer.
  * Handles conversation lifecycle for shared product investigations.
- * One conversation per (platform, sourceProductId, window) — visible to all authorized team members.
+ * One conversation per (platform, sourceProductId) — visible to all authorized team members.
+ * Window/scope is determined from each question's natural language, not from UI selector.
  * createdBy is audit metadata, not an access control gate.
  */
 
 /**
- * Get or create a conversation for a product + window.
- * Ensures exactly one conversation per (platform, sourceProductId, window).
+ * Get or create a conversation for a product.
+ * Ensures exactly one conversation per (platform, sourceProductId).
  * All authorized team members see the same conversation.
+ * Questions within this conversation may reference different time windows/scopes,
+ * determined from the natural language of each question.
  */
 export async function getOrCreateConversation(
   platform: Platform,
   sourceProductId: string,
-  window: DateWindow,
   createdBy?: string,  // Current user for audit trail (optional)
 ): Promise<AiConversation> {
   const [conversation] = await AiConversation.findOrCreate({
     where: {
       platform,
       sourceProductId,
-      windowStart: window.start,
-      windowEnd: window.end,
     },
     defaults: {
       platform,
       sourceProductId,
-      windowStart: window.start,
-      windowEnd: window.end,
       createdBy: createdBy || null,
       messages: [],
     },

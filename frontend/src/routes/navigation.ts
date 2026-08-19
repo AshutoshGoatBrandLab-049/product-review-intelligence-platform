@@ -1,4 +1,4 @@
-import { LayoutDashboard, ListOrdered, TriangleAlert, MessagesSquare, ArrowLeftRight, ShieldCheck, Sparkles } from "lucide-react";
+import { LayoutDashboard, ListOrdered, TriangleAlert, MessagesSquare, ArrowLeftRight, ShieldCheck, Sparkles, BarChart3 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 export interface NavItem {
@@ -32,6 +32,7 @@ export const NAV_GROUPS: NavGroup[] = [
     label: "Investigate",
     items: [
       { to: "/products", label: "Products", icon: ListOrdered },
+      { to: "/reviews-overview", label: "Review Overview", icon: BarChart3 },
       { to: "/warnings", label: "Warnings", icon: TriangleAlert },
       { to: "/problems", label: "Problems", icon: MessagesSquare },
       { to: "/ai/analyst", label: "AI Analyst", icon: Sparkles },

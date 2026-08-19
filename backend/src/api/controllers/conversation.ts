@@ -2,24 +2,21 @@ import type { Request, Response } from "express";
 import { getOrCreateConversation, getConversation, listConversations as listAllConversations } from "../../modules/ai/conversationStore.js";
 import { getValidatedParams } from "../middleware/validate.js";
 import type { ProductParams } from "../schemas.js";
-import { resolveNamedWindow } from "../../modules/analytics/dateWindows.js";
-import type { NamedWindow } from "../../modules/analytics/dateWindows.js";
 
 /**
  * Phase 10 Step 2 — Team conversation endpoints.
- * Conversations are shared across authorized team members by product+window.
+ * Conversations are shared across authorized team members by product only.
+ * One conversation per (platform, sourceProductId); window/scope determined from questions.
  * createdBy is audit metadata only, not an access control gate.
  */
 
 export async function getOrCreateProductConversation(req: Request, res: Response): Promise<void> {
   const { platform, sourceProductId } = getValidatedParams<ProductParams>(req);
-  const window = req.query.window as NamedWindow | undefined;
-  const resolvedWindow = resolveNamedWindow(window ?? "30d");
 
   // Current user for audit trail
   const createdBy = (req as any).user?.sub;
 
-  const conversation = await getOrCreateConversation(platform, sourceProductId, resolvedWindow, createdBy);
+  const conversation = await getOrCreateConversation(platform, sourceProductId, createdBy);
 
   res.json({
     id: conversation.id,

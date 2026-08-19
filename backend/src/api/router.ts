@@ -22,7 +22,7 @@ import { getExecutiveDashboard } from "./controllers/dashboard.js";
 import { getProductRankings } from "./controllers/rankings.js";
 import { getProblems } from "./controllers/problems.js";
 import { getEvidenceReviews } from "./controllers/evidence.js";
-import { getProductReviews } from "./controllers/reviews.js";
+import { getProductReviews, getReviewsOverview } from "./controllers/reviews.js";
 import { getIngestionStatus, getAiUsage } from "./controllers/system.js";
 import { analyzeProduct } from "./controllers/analyst.js";
 import { getOrCreateProductConversation, getConversationDetails, listConversations } from "./controllers/conversation.js";
@@ -106,6 +106,13 @@ apiRouter.get(
   validateParams(ProductParamsSchema),
   validateQuery(ProductReviewsQuerySchema),
   asyncHandler(getProductReviews),
+);
+
+apiRouter.get(
+  "/v1/reviews/overview",
+  authenticate,
+  anyRole,
+  asyncHandler(getReviewsOverview),
 );
 
 apiRouter.get(

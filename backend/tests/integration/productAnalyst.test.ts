@@ -40,7 +40,6 @@ describe("analyzeProductQuestion — retrieval intent never touches the AI provi
         platform: product.platform,
         sourceProductId: product.source_product_id,
         userQuestion: "show me all the bad reviews",
-        window: "12m",
       },
       provider,
     );
@@ -71,7 +70,6 @@ describe("analyzeProductQuestion — retrieval intent never touches the AI provi
         platform: product.platform,
         sourceProductId: product.source_product_id,
         userQuestion: "show me the first 1",
-        window: "12m",
       },
       provider,
     );
@@ -91,7 +89,6 @@ describe("analyzeProductQuestion — analysis intent, evidence integrity", () =>
         platform: product.platform,
         sourceProductId: product.source_product_id,
         userQuestion: "What's the biggest issue?",
-        window: "12m",
       },
       provider,
     );
@@ -121,7 +118,6 @@ describe("analyzeProductQuestion — analysis intent, evidence integrity", () =>
         platform: product.platform,
         sourceProductId: product.source_product_id,
         userQuestion: "What's the biggest issue?",
-        window: "12m",
       },
       provider,
     );

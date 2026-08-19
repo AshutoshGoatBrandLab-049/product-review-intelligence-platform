@@ -1,8 +1,9 @@
 import { useMemo, useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { useParams, useSearchParams, useNavigate } from "react-router-dom";
 import { ArrowLeft, Sparkles, AlertCircle } from "lucide-react";
 import { useProductDetail, useProductSignals, useProductInsights } from "@/hooks/queries/useProduct";
 import { useEvidenceReviews } from "@/hooks/queries/useEvidence";
+import { AIAnalystPanel } from "@/components/ai/AIAnalystPanel";
 import { WindowSelector } from "@/components/intelligence/WindowSelector";
 import { MetricCard } from "@/components/intelligence/MetricCard";
 import { KpiSkeleton } from "@/components/intelligence/KpiSkeleton";
@@ -40,10 +41,30 @@ function readWindowParam(raw: string | null): NamedWindow {
  * → AI interpretation (if requested) → honest capability boundaries.
  */
 export function ProductDetail() {
+  const navigate = useNavigate();
   const params = useParams<{ platform: Platform; sourceProductId: string }>();
   const platform = params.platform!;
   const sourceProductId = params.sourceProductId!;
   const [searchParams, setSearchParams] = useSearchParams();
+
+  // Context-aware back navigation
+  const backFrom = searchParams.get("from");
+  const rankingPlatform = searchParams.get("platform");
+  const rankingType = searchParams.get("type");
+  const rankingPage = searchParams.get("page");
+
+  const handleBack = () => {
+    if (backFrom === "ranking" && rankingPlatform && rankingType) {
+      // Return to the ranking page that sent us here, preserving pagination
+      const backUrl = rankingPage
+        ? `/reviews-overview/${rankingPlatform}/${rankingType}?page=${rankingPage}`
+        : `/reviews-overview/${rankingPlatform}/${rankingType}`;
+      navigate(backUrl);
+    } else {
+      // Default: return to products list
+      navigate("/products");
+    }
+  };
   const window_ = readWindowParam(searchParams.get("window"));
 
   function handleWindowChange(next: NamedWindow) {
@@ -76,14 +97,21 @@ export function ProductDetail() {
   const reviewsQuery = useEvidenceReviews(evidenceIds, evidenceIds.length > 0);
 
   return (
-    <div className="space-y-6">
-      {/* Product header with context and navigation */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+    <div className="grid gap-6 lg:grid-cols-3">
+      {/* Main product content - left side (2/3 on desktop, full on mobile) */}
+      <div className="lg:col-span-2 space-y-6">
+        {/* Product header with context and navigation */}
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="space-y-2">
-          <Link to="/products" className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
+          <button
+            onClick={handleBack}
+            className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+          >
             <ArrowLeft className="size-3" />
-            Back to Products
-          </Link>
+            {backFrom === "ranking" && rankingType
+              ? `Back to ${rankingType === "negative" ? "Negative" : "Positive"} Reviews`
+              : "Back to Products"}
+          </button>
           <div>
             <h1 className="text-3xl font-bold tracking-tight">{sourceProductId}</h1>
             <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -388,6 +416,29 @@ export function ProductDetail() {
           </section>
         </>
       )}
+      </div>
+
+      {/* AI Analyst Panel - right side (1/3 on desktop, full on mobile) */}
+      <div className="lg:col-span-1">
+        <div className="sticky top-6">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm flex items-center gap-2">
+                <Sparkles className="size-4 text-violet-600" />
+                AI Analyst
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <AIAnalystPanel
+                platform={platform}
+                productId={sourceProductId}
+                showProductSelection={false}
+                compact={true}
+              />
+            </CardContent>
+          </Card>
+        </div>
+      </div>
     </div>
   );
 }
