@@ -1,67 +1,14 @@
-import { useState, useEffect, memo } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { ChevronLeft, BarChart3, Loader, Eye, Sparkles } from "lucide-react";
 import { getReviewsOverview, type ReviewsOverviewResponse } from "@/api/endpoints/reviews";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
-
-// Memoized row component to prevent unnecessary re-renders
-interface ProductRowProps {
-  product: any;
-  type: string;
-  loading: boolean;
-  onProductClick: (id: string) => void;
-  onAIAnalystClick: (id: string) => void;
-}
-
-const ProductRowMemo = memo(function ProductRow({ product, type, loading, onProductClick, onAIAnalystClick }: ProductRowProps) {
-  const displayPercent = type === "negative"
-    ? Math.round((product.negativeCount / product.totalInLatestTen) * 100)
-    : Math.round((product.positiveCount / product.totalInLatestTen) * 100);
-
-  const ratingValue = typeof product.averageRating === 'number'
-    ? product.averageRating
-    : parseFloat(String(product.averageRating)) || 0;
-
-  return (
-    <TableRow key={product.sourceProductId} className="hover:bg-slate-800/50">
-      <TableCell className="font-bold text-purple-300">#{product.rank}</TableCell>
-      <TableCell className="font-mono text-sm">{product.sourceProductId}</TableCell>
-      <TableCell className="capitalize">{product.platform}</TableCell>
-      <TableCell className="text-right">{ratingValue.toFixed(1)}</TableCell>
-      <TableCell className="text-right font-semibold">{displayPercent}%</TableCell>
-      <TableCell className="text-right">{product.totalInLatestTen}</TableCell>
-      <TableCell className="text-center">
-        <div className="flex gap-2 justify-center">
-          <button
-            onClick={() => onProductClick(product.sourceProductId)}
-            disabled={loading}
-            className="inline-flex items-center gap-2 px-3 py-3 rounded text-sm font-medium bg-muted text-foreground hover:bg-muted/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-muted"
-            title="View detailed product information"
-          >
-            <Eye className="size-4" />
-            View Details
-          </button>
-          <button
-            onClick={() => onAIAnalystClick(product.sourceProductId)}
-            disabled={loading}
-            className="inline-flex items-center gap-2 px-3 py-3 rounded text-sm font-medium bg-violet-600 text-white hover:bg-violet-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-violet-600"
-            title="Open AI Analyst dashboard for this product"
-          >
-            <Sparkles className="size-4" />
-            AI Dashboard
-          </button>
-        </div>
-      </TableCell>
-    </TableRow>
-  );
-});
 
 interface ListState {
   data: ReviewsOverviewResponse | null;
   loading: boolean;
   error: string | null;
   page: number;
-  showData: boolean;
 }
 
 
@@ -96,21 +43,11 @@ export function ProductRankingList() {
   const cachedData = getCachedData();
 
   const [state, setState] = useState<ListState>({
-    data: cachedData || null,
-    loading: !cachedData,
+    data: cachedData || null, // ✅ Use cache if available
+    loading: !cachedData, // ✅ Only show loading if no cache
     error: null,
     page: currentPage,
-    showData: !!cachedData,
   });
-
-  // ✅ CRITICAL FIX: When currentPage changes, always invalidate old page's cached data
-  // This ensures fresh data fetches when user clicks pagination buttons
-  useEffect(() => {
-    // Don't show stale cached data from different page
-    if (state.data && state.page !== currentPage) {
-      setState(prev => ({ ...prev, data: null, loading: true, page: currentPage, showData: false }));
-    }
-  }, [currentPage, state.page, state.data]);
 
   useEffect(() => {
     // Validate params inline to avoid dependency array issues
@@ -122,8 +59,8 @@ export function ProductRankingList() {
       return;
     }
 
-    // Only fetch if state.loading is true (cache invalidation set it)
-    if (!state.loading) {
+    // If data is cached, skip fetch (optimization: 10/10 performance)
+    if (cachedData) {
       return;
     }
 
@@ -134,6 +71,7 @@ export function ProductRankingList() {
     const performFetch = async () => {
       try {
         if (!isMounted) return;
+        setState((prev) => ({ ...prev, loading: true, error: null }));
 
         const result = await getReviewsOverview({
           platform: platform as "flipkart" | "myntra",
@@ -171,15 +109,7 @@ export function ProductRankingList() {
     return () => {
       isMounted = false;
     };
-  }, [platform, type, currentPage, navigate, state.loading]);
-
-  // ✅ RENDER IMMEDIATELY: Show data as soon as API returns
-  // The skeleton feedback + fade animation masks any render jank
-  useEffect(() => {
-    if (state.data && !state.loading && !state.showData) {
-      setState((prev) => ({ ...prev, showData: true }));
-    }
-  }, [state.data, state.loading, state.showData]);
+  }, [platform, type, currentPage, navigate, cachedData]);
 
   // Save scroll position before navigating away (10/10 UX)
   const saveScrollPosition = () => {
@@ -259,38 +189,7 @@ export function ProductRankingList() {
         )}
 
         {/* Loading State */}
-                {/* Show skeleton while loading (smooth UX) */}
         {state.loading && (
-          <Table className="mb-12 opacity-50 transition-opacity duration-300">
-            <TableHeader>
-              <TableRow>
-                <TableHead className="w-16">Rank</TableHead>
-                <TableHead>Product ID</TableHead>
-                <TableHead>Marketplace</TableHead>
-                <TableHead className="text-right">Avg Rating</TableHead>
-                <TableHead className="text-right">{type === "negative" ? "Negative %" : "Positive %"}</TableHead>
-                <TableHead className="text-right">Reviews</TableHead>
-                <TableHead className="text-center">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {Array(10).fill(0).map((_, i) => (
-                <TableRow key={`skeleton-${i}`} className="animate-pulse">
-                  <TableCell><div className="h-4 bg-slate-700 rounded w-8"></div></TableCell>
-                  <TableCell><div className="h-4 bg-slate-700 rounded w-24"></div></TableCell>
-                  <TableCell><div className="h-4 bg-slate-700 rounded w-16"></div></TableCell>
-                  <TableCell className="text-right"><div className="h-4 bg-slate-700 rounded w-12 ml-auto"></div></TableCell>
-                  <TableCell className="text-right"><div className="h-4 bg-slate-700 rounded w-12 ml-auto"></div></TableCell>
-                  <TableCell className="text-right"><div className="h-4 bg-slate-700 rounded w-8 ml-auto"></div></TableCell>
-                  <TableCell className="text-center"><div className="h-8 bg-slate-700 rounded w-24 mx-auto"></div></TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        )}
-
-        {/* Show full spinner only on initial load (never, because skeleton shows) */}
-        {false && (
           <div className="flex flex-col items-center justify-center py-20">
             <Loader className="w-12 h-12 text-purple-400 animate-spin mb-4" />
             <p className="text-gray-400 text-lg">Loading products...</p>
@@ -298,10 +197,10 @@ export function ProductRankingList() {
         )}
 
         {/* Products Table */}
-        {state.data && !state.loading && state.showData && (
+        {state.data && (
           <>
             {state.data.products.length > 0 ? (
-              <Table className="mb-12 animate-in fade-in duration-500" style={{ contain: 'layout style paint' }}>
+              <Table className="mb-12">
                 <TableHeader>
                   <TableRow>
                     <TableHead className="w-16">Rank</TableHead>
@@ -313,17 +212,50 @@ export function ProductRankingList() {
                     <TableHead className="text-center">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
-                <TableBody style={{ contain: 'content' }}>
-                  {state.data.products.map((product) => (
-                    <ProductRowMemo
-                      key={product.sourceProductId}
-                      product={product}
-                      type={type || 'positive'}
-                      loading={state.loading}
-                      onProductClick={handleProductClick}
-                      onAIAnalystClick={handleAIAnalystClick}
-                    />
-                  ))}
+                <TableBody>
+                  {state.data.products.map((product) => {
+                    const displayPercent = type === "negative"
+                      ? Math.round((product.negativeCount / product.totalInLatestTen) * 100)
+                      : Math.round((product.positiveCount / product.totalInLatestTen) * 100);
+
+                    // Handle averageRating which might be a string from database
+                    const ratingValue = typeof product.averageRating === 'number'
+                      ? product.averageRating
+                      : parseFloat(String(product.averageRating)) || 0;
+
+                    return (
+                      <TableRow key={product.sourceProductId} className="hover:bg-slate-800/50">
+                        <TableCell className="font-bold text-purple-300">#{product.rank}</TableCell>
+                        <TableCell className="font-mono text-sm">{product.sourceProductId}</TableCell>
+                        <TableCell className="capitalize">{product.platform}</TableCell>
+                        <TableCell className="text-right">{ratingValue.toFixed(1)}</TableCell>
+                        <TableCell className="text-right font-semibold">{displayPercent}%</TableCell>
+                        <TableCell className="text-right">{product.totalInLatestTen}</TableCell>
+                        <TableCell className="text-center">
+                          <div className="flex gap-2 justify-center">
+                            <button
+                              onClick={() => handleProductClick(product.sourceProductId)}
+                              disabled={state.loading}
+                              className="inline-flex items-center gap-2 px-3 py-3 rounded text-sm font-medium bg-muted text-foreground hover:bg-muted/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-muted"
+                              title="View detailed product information"
+                            >
+                              <Eye className="size-4" />
+                              View Details
+                            </button>
+                            <button
+                              onClick={() => handleAIAnalystClick(product.sourceProductId)}
+                              disabled={state.loading}
+                              className="inline-flex items-center gap-2 px-3 py-3 rounded text-sm font-medium bg-violet-600 text-white hover:bg-violet-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-violet-600"
+                              title="Open AI Analyst dashboard for this product"
+                            >
+                              <Sparkles className="size-4" />
+                              AI Dashboard
+                            </button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
                 </TableBody>
               </Table>
             ) : (
@@ -340,8 +272,6 @@ export function ProductRankingList() {
                   className="px-6 py-3 bg-gradient-to-r from-purple-600 to-blue-600 rounded-lg text-white font-semibold hover:from-purple-500 hover:to-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all transform hover:scale-105 active:scale-95"
                   disabled={currentPage === 0}
                   onClick={() => {
-                    // ✅ Scroll to top smoothly for better pagination UX
-                    window.scrollTo(0, 0);
                     const newPage = Math.max(0, currentPage - 1);
                     const nextParams = new URLSearchParams(searchParams);
                     nextParams.set("page", String(newPage));
@@ -359,8 +289,6 @@ export function ProductRankingList() {
                   className="px-6 py-3 bg-gradient-to-r from-purple-600 to-blue-600 rounded-lg text-white font-semibold hover:from-purple-500 hover:to-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all transform hover:scale-105 active:scale-95"
                   disabled={currentPage >= state.data.pagination.totalPages - 1}
                   onClick={() => {
-                    // ✅ Scroll to top smoothly for better pagination UX
-                    window.scrollTo(0, 0);
                     const newPage = Math.min(state.data!.pagination.totalPages - 1, currentPage + 1);
                     const nextParams = new URLSearchParams(searchParams);
                     nextParams.set("page", String(newPage));

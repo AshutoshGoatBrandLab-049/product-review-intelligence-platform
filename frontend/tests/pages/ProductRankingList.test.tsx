@@ -64,6 +64,7 @@ function renderProductRankingList(initialPath = "/reviews-overview/flipkart/nega
 describe("ProductRankingList — Pagination Preservation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    sessionStorage.clear(); // ✅ Clear cache between tests
     getReviewsOverviewMock.mockResolvedValue(makeReviewsOverviewResponse());
   });
 

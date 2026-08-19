@@ -181,7 +181,7 @@
 
 @layer base {
   * {
-    @apply border-border outline-ring/50;
+    @apply border-border;
     }
   body {
     @apply bg-background text-foreground;
@@ -189,6 +189,15 @@
   html {
     @apply font-sans;
     }
+
+  /* Enhanced focus ring for keyboard navigation */
+  button:focus,
+  input:focus,
+  textarea:focus,
+  select:focus,
+  [role="button"]:focus {
+    @apply outline-2 outline-offset-2 outline-ring;
+  }
 }
 
 /* Phase 8 Step 1 — respected globally, not per-component, so no later step

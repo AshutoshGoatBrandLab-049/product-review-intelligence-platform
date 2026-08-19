@@ -23,6 +23,10 @@ export async function getOrCreateConversation(
   sourceProductId: string,
   createdBy?: string,  // Current user for audit trail (optional)
 ): Promise<AiConversation> {
+  const today = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+
   const [conversation] = await AiConversation.findOrCreate({
     where: {
       platform,
@@ -31,6 +35,8 @@ export async function getOrCreateConversation(
     defaults: {
       platform,
       sourceProductId,
+      windowStart: yesterday.toISOString().split('T')[0], // YYYY-MM-DD format
+      windowEnd: today.toISOString().split('T')[0], // YYYY-MM-DD format
       createdBy: createdBy || null,
       messages: [],
     },

@@ -39,9 +39,9 @@ export default function AIProductAnalyst() {
       {fromRanking && (
         <button
           onClick={handleBack}
-          className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+          className="inline-flex items-center gap-2 px-3 py-3 rounded text-sm font-medium bg-muted text-foreground hover:bg-muted/80 transition-colors"
         >
-          <ArrowLeft className="size-3" />
+          <ArrowLeft className="size-4" />
           Back to {rankingType === "negative" ? "Negative" : "Positive"} Reviews
         </button>
       )}
