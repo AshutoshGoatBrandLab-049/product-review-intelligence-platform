@@ -127,7 +127,7 @@ test('OPTION A: Complete WebSocket Flow - In-Process Ingestion', async ({ browse
   });
 
   page.on('response', (response) => {
-    if (response.url().includes('/api/reviews')) {
+    if (response.url().includes('/v1/reviews/overview')) {
       apiCalls.push({
         url: response.url().split('?')[0],
         status: response.status(),
@@ -236,10 +236,10 @@ test('OPTION A: Complete WebSocket Flow - In-Process Ingestion', async ({ browse
   console.log('Flow Steps:');
   console.log(`1. ✅ Source data inserted: YES (100 rows)`);
   console.log(`2. ✅ Ingestion ran: YES (in-process - same process, shared singletons)`);
-  console.log(`3. ✅ DB commit: YES (${129} rows processed)`);
+  console.log(`3. ✅ DB commit: YES (129 rows processed)`);
   console.log(`4. ${productUpdatedEvent ? '✅' : '❌'} WebSocket event emitted: ${productUpdatedEvent ? `YES (${productDataUpdated} events)` : 'NO'}`);
   console.log(`5. ${productUpdatedEvent ? '✅' : '❌'} Browser received event: ${productUpdatedEvent ? `YES (${productDataUpdated} events)` : 'NO'}`);
-  console.log(`6. ${apiRefreshMade ? '✅' : '❌'} API refresh triggered: ${apiRefreshMade ? 'YES' : 'NO'}`);
+  console.log(`6. ${apiRefreshMade ? '✅' : '❌'} API refresh triggered: ${apiRefreshMade ? `YES (${apiCalls.length} calls)` : 'NO'}`);
   console.log(`7. ${noPageReload ? '✅' : '❌'} UI updated without reload: ${noPageReload ? 'YES' : 'NO'}`);
 
   console.log('\nState Preservation:');
