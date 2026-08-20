@@ -1,0 +1,16 @@
+SET
+ platform | source_product_id | normalized_count 
+----------+-------------------+------------------
+ myntra   | 100               |               50
+(1 row)
+
+ last_processed_id 
+-------------------
+             51203
+(1 row)
+
+ source_remaining 
+------------------
+               50
+(1 row)
+

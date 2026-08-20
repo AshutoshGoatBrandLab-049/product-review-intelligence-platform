@@ -12,6 +12,10 @@ import { mapMyntraReview, MYNTRA_MAPPER_VERSION } from "./myntra/mapper.js";
 import { config } from "../../config/index.js";
 import type { Platform, UnifiedReview } from "../../types/unifiedReview.js";
 import { logger } from "../../shared/logger.js";
+import { webSocketEventEmitter } from "../websocket/eventEmitter.js";
+import { synchronizeProductDimension, synchronizeProductDailyMetrics } from "../analytics/synchronize.js";
+import type { AffectedProduct } from "../analytics/synchronize.js";
+import { detectSourceReplacement, cleanupStaleSourceData, type ReplacementCleanupResult } from "./sourceReplacement.js";
 
 export interface TrackAResult {
   platform: Platform;
@@ -53,6 +57,22 @@ export async function runTrackA(platform: Platform, jobId: string = randomUUID()
   let afterId = await getLastSeenSourceId(platform);
   const sourceAfterIdStart = afterId;
 
+  // Check for source replacement (marketplace-agnostic)
+  let isReplacement = false;
+  const firstBatch =
+    platform === "flipkart"
+      ? await prodReadOnly.getFlipkartReviewsPage(afterId, 1)
+      : await prodReadOnly.getMyntraReviewsPage(afterId, 1);
+
+  if (firstBatch.length === 0) {
+    // No new data — check if this is a replacement
+    isReplacement = await detectSourceReplacement(platform);
+    if (isReplacement) {
+      logger.info({ jobId, platform }, "Source replacement detected, will process all current data");
+      afterId = -1; // Will become id > 0 in next batch query
+    }
+  }
+
   const result: TrackAResult = {
     platform,
     jobId,
@@ -64,6 +84,8 @@ export async function runTrackA(platform: Platform, jobId: string = randomUUID()
     durationMs: 0,
     status: "success",
   };
+
+  let cleanupResult: ReplacementCleanupResult | null = null;
 
   try {
     for (;;) {
@@ -102,6 +124,34 @@ export async function runTrackA(platform: Platform, jobId: string = randomUUID()
         toInsert.push(buildRow(review, mapperVersion(platform)));
       }
 
+      // Collect affected products for event emission
+      let affectedProducts = new Map<string, AffectedProduct>();
+      logger.info(
+        { jobId, platform, toInsertCount: toInsert.length },
+        `[PHASE3-DEBUG] Starting to collect affected products from ${toInsert.length} rows`
+      );
+      for (const row of toInsert) {
+        logger.info(
+          {
+            jobId,
+            platform,
+            sourceProductId: row.sourceProductId,
+            sourceRowId: row.sourceRowId
+          },
+          `[PHASE3-DEBUG] Row: sourceProductId=${row.sourceProductId}, sourceRowId=${row.sourceRowId}`
+        );
+        const key = `${row.platform}:${row.sourceProductId}`;
+        affectedProducts.set(key, {
+          platform: row.platform,
+          sourceProductId: row.sourceProductId,
+        });
+      }
+      logger.info(
+        { jobId, platform, affectedProductsCount: affectedProducts.size },
+        `[PHASE3-DEBUG] Collected ${affectedProducts.size} affected products`
+      );
+
+      // CRITICAL: Synchronize within transaction boundary, emit event only AFTER commit
       await appSequelize.transaction(async (t) => {
         if (toInsert.length > 0) {
           await NormalizedReview.bulkCreate(toInsert, {
@@ -109,8 +159,64 @@ export async function runTrackA(platform: Platform, jobId: string = randomUUID()
             ignoreDuplicates: true, // harmless overlap with Track B — ON CONFLICT DO NOTHING
           });
         }
+
+        // If replacement detected: cleanup stale data
+        if (isReplacement) {
+          cleanupResult = await cleanupStaleSourceData(platform, t);
+          // Use cleaned products as affected products (all current platform products)
+          affectedProducts.clear();
+          for (const product of cleanupResult.affectedProducts) {
+            const key = `${product.platform}:${product.sourceProductId}`;
+            affectedProducts.set(key, product);
+          }
+        }
+
+        // Synchronize product analytics WITHIN transaction
+        const products = Array.from(affectedProducts.values());
+        if (products.length > 0) {
+          await synchronizeProductDimension(products, t);
+          await synchronizeProductDailyMetrics(products, t);
+        }
+
         await advanceLastSeenSourceId(platform, maxIdInBatch, t);
       });
+
+      // ONLY AFTER successful commit: emit WebSocket events
+      logger.info(
+        { jobId, platform, affectedProductCount: affectedProducts.size },
+        `[PHASE3-DEBUG] About to emit ${affectedProducts.size} WebSocket events`
+      );
+
+      for (const product of affectedProducts.values()) {
+        logger.info(
+          { jobId, platform, sourceProductId: product.sourceProductId },
+          `[PHASE3-DEBUG] Emitting PRODUCT_DATA_UPDATED for product`
+        );
+        try {
+          webSocketEventEmitter.broadcastEvent({
+            type: "PRODUCT_DATA_UPDATED",
+            platform: product.platform,
+            sourceProductId: product.sourceProductId,
+            changedAt: new Date().toISOString(),
+            changes: {
+              reviews: true,
+              productDimension: true,
+              dailyMetrics: true,
+            },
+          });
+        } catch (err) {
+          logger.error(
+            {
+              jobId,
+              platform: product.platform,
+              sourceProductId: product.sourceProductId,
+              error: (err as Error).message,
+            },
+            "Failed to broadcast product update event",
+          );
+          // Do NOT rollback database on WebSocket failure - continue
+        }
+      }
 
       result.rowsInserted += toInsert.length;
       afterId = maxIdInBatch;
@@ -145,6 +251,13 @@ export async function runTrackA(platform: Platform, jobId: string = randomUUID()
   }
 
   result.durationMs = Date.now() - startedAt;
+
+  const cleanupStats = cleanupResult || {
+    staleReviewsDeleted: 0,
+    staleProductsDeleted: 0,
+    staleMetricsDeleted: 0,
+  };
+
   logger.info(
     {
       jobId,
@@ -155,6 +268,10 @@ export async function runTrackA(platform: Platform, jobId: string = randomUUID()
       rowsRead: result.rowsRead,
       rowsInserted: result.rowsInserted,
       rowsRejected: result.rowsRejected,
+      sourceReplacement: isReplacement,
+      staleReviewsDeleted: cleanupStats.staleReviewsDeleted,
+      staleProductsDeleted: cleanupStats.staleProductsDeleted,
+      staleMetricsDeleted: cleanupStats.staleMetricsDeleted,
       durationMs: result.durationMs,
       status: result.status,
     },

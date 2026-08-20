@@ -1,0 +1,28 @@
+{
+  "timestamp": "2026-08-20T09:47:09.345Z",
+  "test": "Phase 3 E2E: WebSocket Integration",
+  "results": {
+    "ingestionSuccess": true,
+    "noPageReload": true,
+    "scrollPreserved": true,
+    "apiCallsMade": 0,
+    "wsEventDetected": false,
+    "consoleErrors": 0
+  },
+  "initialState": {
+    "url": "http://localhost:5173/reviews-overview/myntra/negative",
+    "scrollY": 0
+  },
+  "finalState": {
+    "url": "http://localhost:5173/reviews-overview/myntra/negative",
+    "scrollY": 0
+  },
+  "networkRequests": [],
+  "consoleMessages": [],
+  "ingestionLogSnippet": "   \u001b[35mrowsRejected\u001b[39m: 0\n    \u001b[35midentityAnomalies\u001b[39m: 0\n    \u001b[35mdurationMs\u001b[39m: 6062\n    \u001b[35mstatus\u001b[39m: \"success\"\n[15:17:04.043] \u001b[32mINFO\u001b[39m (66207): \u001b[36mIngestion run complete\u001b[39m\n    \u001b[35mjobId\u001b[39m: \"e2661acd-7754-4187-9055-df6e8080a589\"\n    \u001b[35mplatform\u001b[39m: \"myntra\"\n    \u001b[35mstatus\u001b[39m: \"success\"\n    \u001b[35mtrackA\u001b[39m: {\n      \"platform\": \"myntra\",\n      \"jobId\": \"e2661acd-7754-4187-9055-df6e8080a589\",\n      \"batchesProcessed\": 1,\n      \"rowsRead\": 300,\n      \"rowsInserted\": 300,\n      \"rowsRejected\": 0,\n      \"finalLastSeenSourceId\": 50302,\n      \"durationMs\": 217,\n      \"status\": \"success\"\n    }\n    \u001b[35mtrackB\u001b[39m: {\n      \"platform\": \"myntra\",\n      \"jobId\": \"e2661acd-7754-4187-9055-df6e8080a589\",\n      \"windowStart\": \"2026-06-11\",\n      \"rowsScanned\": 15800,\n      \"rowsInserted\": 0,\n      \"rowsUnchanged\": 15800,\n      \"rowsUpdated\": 0,\n      \"rowsRejected\": 0,\n      \"identityAnomaliesDetected\": 0,\n      \"durationMs\": 6062,\n      \"status\": \"success\"\n    }\n",
+  "screenshots": {
+    "before": "01-before-ui.png",
+    "after": "02-after-ui.png"
+  },
+  "video": "page@*.webm"
+}

@@ -26,6 +26,7 @@ import { getProductReviews, getReviewsOverview } from "./controllers/reviews.js"
 import { getIngestionStatus, getAiUsage } from "./controllers/system.js";
 import { analyzeProduct } from "./controllers/analyst.js";
 import { getOrCreateProductConversation, getConversationDetails, listConversations } from "./controllers/conversation.js";
+import ingestionRouter from "./routes/ingestion.js";
 
 /**
  * Phase 6 Step 2 — the approved 11-endpoint set (§5), and nothing else.
@@ -149,3 +150,6 @@ apiRouter.get(
 // System endpoints — admin-only, matching §18's original "Live, admin-only" designation.
 apiRouter.get("/v1/system/ingestion-status", authenticate, adminOnly, asyncHandler(getIngestionStatus));
 apiRouter.get("/v1/system/ai-usage", authenticate, adminOnly, asyncHandler(getAiUsage));
+
+// Internal ingestion endpoints (for Options B & C)
+apiRouter.use("/internal", ingestionRouter);

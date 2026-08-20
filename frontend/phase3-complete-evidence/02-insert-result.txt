@@ -1,0 +1,7 @@
+SET
+INSERT 0 50
+ newly_inserted 
+----------------
+             50
+(1 row)
+

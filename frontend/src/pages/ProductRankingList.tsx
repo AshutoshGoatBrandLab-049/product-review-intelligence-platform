@@ -3,6 +3,7 @@ import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { ChevronLeft, BarChart3, Loader, Eye, Sparkles } from "lucide-react";
 import { getReviewsOverview, type ReviewsOverviewResponse } from "@/api/endpoints/reviews";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
+import { useWebSocketEvent } from "@/hooks/useWebSocket";
 
 // Memoized row component to prevent unnecessary re-renders
 interface ProductRowProps {
@@ -205,6 +206,78 @@ export function ProductRankingList() {
       }
     }
   }, [state.data, state.loading, platform, type, currentPage]);
+
+  // Listen for WebSocket product updates
+  useWebSocketEvent("PRODUCT_DATA_UPDATED", (event) => {
+    console.log("[ProductRankingList] WebSocket event received:", {
+      eventPlatform: event.platform,
+      currentPlatform: platform,
+      hasStateData: !!state.data,
+      hasType: !!type
+    });
+    if (!platform || !type || !state.data) {
+      console.log("[ProductRankingList] Skipping event - missing required data");
+      return;
+    }
+    if (event.platform !== platform) {
+      console.log(`[ProductRankingList] Skipping event - platform mismatch: ${event.platform} !== ${platform}`);
+      return;
+    }
+
+    // Find the product in current cached data
+    const productIndex = state.data.products.findIndex(
+      (p) => p.sourceProductId === event.sourceProductId
+    );
+
+    if (productIndex === -1) return; // Product not on this page
+
+    // ✅ Invalidate the cache for this page to force refresh on next navigation
+    try {
+      sessionStorage.removeItem(cacheKey);
+    } catch (e) {
+      // Silently ignore
+    }
+
+    // ✅ Update only the affected product row to show fresh data
+    // Fetch fresh data for just this product from server (or use optimistic update if needed)
+    setState((prev) => {
+      if (!prev.data) return prev;
+
+      // For now, mark as needing refresh by re-fetching the entire list
+      // This is the safest approach to ensure ProductRowMemo updates correctly
+      return prev;
+    });
+
+    // ✅ Force a silent refresh of the data
+    // Re-fetch with the same parameters to get fresh product stats
+    const performRefresh = async () => {
+      console.log("[ProductRankingList] Calling getReviewsOverview to refresh data");
+      try {
+        const result = await getReviewsOverview({
+          platform: platform as "flipkart" | "myntra",
+          type: type as "negative" | "positive",
+          page: currentPage,
+        });
+        console.log("[ProductRankingList] API refresh completed");
+
+        setState((prev) => ({ ...prev, data: result, loading: false }));
+
+        // Update cache with fresh data
+        try {
+          sessionStorage.setItem(cacheKey, JSON.stringify({
+            data: result,
+            timestamp: Date.now(),
+          }));
+        } catch (e) {
+          // Silently ignore storage errors
+        }
+      } catch (err) {
+        console.error("[ProductRankingList] Failed to refresh data:", err);
+      }
+    };
+
+    performRefresh();
+  });
 
   const handleProductClick = (sourceProductId: string) => {
     saveScrollPosition(); // ✅ Save before navigation

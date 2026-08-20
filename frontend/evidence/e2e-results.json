@@ -1,0 +1,20 @@
+{
+  "timestamp": "2026-08-20T09:28:04.103Z",
+  "ingestionCompleted": true,
+  "wsMessageReceived": false,
+  "wsPayload": null,
+  "apiCallMade": false,
+  "networkRequests": [],
+  "noPageReload": true,
+  "consoleErrors": [],
+  "evidence": {
+    "screenshots": [
+      "01-app-initial.png",
+      "02-before-ingestion.png",
+      "03-after-ingestion.png"
+    ],
+    "logs": [
+      "ingestion.log"
+    ]
+  }
+}

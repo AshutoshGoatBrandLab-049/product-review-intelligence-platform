@@ -13,6 +13,9 @@ import { mapMyntraReview, MYNTRA_MAPPER_VERSION } from "./myntra/mapper.js";
 import { config } from "../../config/index.js";
 import type { Platform, UnifiedReview } from "../../types/unifiedReview.js";
 import { logger } from "../../shared/logger.js";
+import { webSocketEventEmitter } from "../websocket/eventEmitter.js";
+import { synchronizeProductDimension, synchronizeProductDailyMetrics } from "../analytics/synchronize.js";
+import type { AffectedProduct } from "../analytics/synchronize.js";
 
 export interface TrackBResult {
   platform: Platform;
@@ -100,6 +103,8 @@ export async function runTrackB(platform: Platform, jobId: string = randomUUID()
       result.rowsScanned += rawRows.length;
       afterId = Math.max(...rawRows.map((r) => (r as { id: number }).id));
 
+      const batchAffectedProducts = new Map<string, AffectedProduct>();
+
       for (const raw of rawRows) {
         const review = mapRawRow(platform, raw);
         const validation = validateUnifiedReview(review);
@@ -127,7 +132,49 @@ export async function runTrackB(platform: Platform, jobId: string = randomUUID()
         const existing = await NormalizedReview.findByPk(canonicalReviewId);
 
         if (!existing) {
-          await NormalizedReview.create(buildRow(review, freshHash, mapperVersion(platform)));
+          // DISCOVERY: new review found — wrap in transaction for synchronization
+          const key = `${review.platform}:${review.sourceProductId}`;
+          batchAffectedProducts.set(key, {
+            platform: review.platform,
+            sourceProductId: review.sourceProductId,
+          });
+
+          await appSequelize.transaction(async (t) => {
+            await NormalizedReview.create(buildRow(review, freshHash, mapperVersion(platform)), {
+              transaction: t,
+            });
+
+            // Synchronize product analytics WITHIN transaction
+            const products = [{ platform: review.platform, sourceProductId: review.sourceProductId }];
+            await synchronizeProductDimension(products, t);
+            await synchronizeProductDailyMetrics(products, t);
+          });
+
+          // ONLY AFTER commit: emit event
+          try {
+            webSocketEventEmitter.broadcastEvent({
+              type: "PRODUCT_DATA_UPDATED",
+              platform: review.platform,
+              sourceProductId: review.sourceProductId,
+              changedAt: new Date().toISOString(),
+              changes: {
+                reviews: true,
+                productDimension: true,
+                dailyMetrics: true,
+              },
+            });
+          } catch (err) {
+            logger.error(
+              {
+                jobId,
+                platform: review.platform,
+                sourceProductId: review.sourceProductId,
+                error: (err as Error).message,
+              },
+              "Failed to broadcast product update event (discovery)",
+            );
+          }
+
           result.rowsInserted += 1;
           continue;
         }
@@ -136,6 +183,13 @@ export async function runTrackB(platform: Platform, jobId: string = randomUUID()
           result.rowsUnchanged += 1;
           continue;
         }
+
+        // UPDATE: content changed — synchronize within transaction
+        const key = `${review.platform}:${review.sourceProductId}`;
+        batchAffectedProducts.set(key, {
+          platform: review.platform,
+          sourceProductId: review.sourceProductId,
+        });
 
         await appSequelize.transaction(async (t) => {
           if (looksLikeIdentitySwap(existing, review)) {
@@ -152,7 +206,37 @@ export async function runTrackB(platform: Platform, jobId: string = randomUUID()
           }
 
           await existing.update(buildRow(review, freshHash, mapperVersion(platform)), { transaction: t });
+
+          // Synchronize product analytics WITHIN transaction
+          const products = [{ platform: review.platform, sourceProductId: review.sourceProductId }];
+          await synchronizeProductDimension(products, t);
+          await synchronizeProductDailyMetrics(products, t);
         });
+
+        // ONLY AFTER commit: emit event
+        try {
+          webSocketEventEmitter.broadcastEvent({
+            type: "PRODUCT_DATA_UPDATED",
+            platform: review.platform,
+            sourceProductId: review.sourceProductId,
+            changedAt: new Date().toISOString(),
+            changes: {
+              reviews: true,
+              productDimension: true,
+              dailyMetrics: true,
+            },
+          });
+        } catch (err) {
+          logger.error(
+            {
+              jobId,
+              platform: review.platform,
+              sourceProductId: review.sourceProductId,
+              error: (err as Error).message,
+            },
+            "Failed to broadcast product update event (update)",
+          );
+        }
 
         result.rowsUpdated += 1;
       }

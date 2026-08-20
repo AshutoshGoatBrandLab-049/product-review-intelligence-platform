@@ -2,6 +2,7 @@ import { RouterProvider } from "react-router-dom";
 import { AuthProvider, useAuth } from "@/providers/AuthProvider";
 import { QueryProvider } from "@/providers/QueryProvider";
 import { ThemeProvider } from "@/providers/ThemeProvider";
+import { WebSocketProvider } from "@/providers/WebSocketProvider";
 import { DevAuthRequired } from "@/pages/DevAuthRequired";
 import { router } from "@/routes/router";
 
@@ -22,9 +23,11 @@ export function App() {
   return (
     <ThemeProvider>
       <AuthProvider>
-        <QueryProvider>
-          <AuthGate />
-        </QueryProvider>
+        <WebSocketProvider>
+          <QueryProvider>
+            <AuthGate />
+          </QueryProvider>
+        </WebSocketProvider>
       </AuthProvider>
     </ThemeProvider>
   );

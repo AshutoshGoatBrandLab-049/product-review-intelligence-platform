@@ -1,8 +1,11 @@
 import { useMemo, useState } from "react";
 import { useParams, useSearchParams, useNavigate } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Sparkles, AlertCircle } from "lucide-react";
 import { useProductDetail, useProductSignals, useProductInsights } from "@/hooks/queries/useProduct";
 import { useEvidenceReviews } from "@/hooks/queries/useEvidence";
+import { useWebSocketEvent } from "@/hooks/useWebSocket";
+import { queryKeys } from "@/api/queryKeys";
 import { AIAnalystPanel } from "@/components/ai/AIAnalystPanel";
 import { WindowSelector } from "@/components/intelligence/WindowSelector";
 import { MetricCard } from "@/components/intelligence/MetricCard";
@@ -42,6 +45,7 @@ function readWindowParam(raw: string | null): NamedWindow {
  */
 export function ProductDetail() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const params = useParams<{ platform: Platform; sourceProductId: string }>();
   const platform = params.platform!;
   const sourceProductId = params.sourceProductId!;
@@ -81,6 +85,29 @@ export function ProductDetail() {
   const insightRequested = requestedForKey === currentKey;
 
   const insightsQuery = useProductInsights(platform, sourceProductId, window_, insightRequested);
+
+  // ✅ Listen for product updates and invalidate affected React Query caches
+  useWebSocketEvent("PRODUCT_DATA_UPDATED", (event) => {
+    if (event.platform !== platform || event.sourceProductId !== sourceProductId) {
+      return; // Not for current product
+    }
+
+    // Invalidate relevant queries to trigger silent refetch
+    queryClient.invalidateQueries({
+      queryKey: queryKeys.productDetail(platform, sourceProductId, window_),
+    });
+
+    queryClient.invalidateQueries({
+      queryKey: queryKeys.productSignals(platform, sourceProductId, window_),
+    });
+
+    // Only invalidate insights if they've been requested (don't auto-fetch)
+    if (insightRequested) {
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.productInsights(platform, sourceProductId, window_),
+      });
+    }
+  });
 
   const { active: activeSignals, notReadyGroups } = useMemo(
     () => splitSignalsByReadiness(signalsQuery.data?.signals ?? []),

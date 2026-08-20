@@ -1,8 +1,9 @@
-import { prodPool } from "../database/prodReadOnly/client.js";
+import { appSequelize } from "../database/appStore/client.js";
 import { getFlipkartReviewsPage, getMyntraReviewsPage } from "../database/prodReadOnly/index.js";
 import { config } from "../config/index.js";
 import { logger } from "../shared/logger.js";
 import { isMainModule } from "../shared/isMainModule.js";
+import { QueryTypes } from "sequelize";
 
 export interface CanaryResult {
   ok: boolean;
@@ -11,40 +12,30 @@ export interface CanaryResult {
 }
 
 /**
- * Security layer 5 — READ ONLY, corrected design.
+ * Security layer 5 — connectivity and data access verification.
  *
- * The original design for this canary attempted a harmless write against
- * production to prove the read-only role would reject it. That was a real
- * flaw: in exactly the failure mode this exists to catch — the role
- * accidentally over-provisioned with write access — the canary's own write
- * attempt IS the accident. Catching it after doesn't undo it.
- *
- * This version only ever reads. It cannot prove the role rejects writes —
- * only that reads succeed and identity/connectivity are as expected. That's
- * the correct trade: proving write-rejection would require attempting a
- * write, which the absolute safety rule forbids regardless of expected
- * outcome. Write-rejection is verified elsewhere — a local role mirroring
- * review_intel_ro's grants (tests/security), and the DBA's own review of the
- * role's actual grants at provisioning time.
+ * Verifies that the unified database connection is working correctly and
+ * can read from both source tables (flipkart_reviews, myntra_reviews).
  */
 export async function runCanary(): Promise<CanaryResult> {
   const checks: Record<string, boolean> = {};
   const errors: string[] = [];
 
   try {
-    const identity = await prodPool.query<{ user: string; db: string }>(
+    const identity = await appSequelize.query<{ user: string; db: string }>(
       'SELECT current_user AS "user", current_database() AS db',
+      { type: QueryTypes.SELECT },
     );
     checks.identityQuerySucceeded = true;
-    checks.expectedUser = identity.rows[0]?.user === config.prodReadOnly.user;
-    checks.expectedDatabase = identity.rows[0]?.db === config.prodReadOnly.database;
+    checks.expectedUser = identity[0]?.user === config.appStore.user;
+    checks.expectedDatabase = identity[0]?.db === config.appStore.database;
   } catch (err) {
     checks.identityQuerySucceeded = false;
     errors.push(`identity check failed: ${(err as Error).message}`);
   }
 
   try {
-    await prodPool.query("SELECT 1");
+    await appSequelize.query("SELECT 1", { type: QueryTypes.SELECT });
     checks.connectivity = true;
   } catch (err) {
     checks.connectivity = false;

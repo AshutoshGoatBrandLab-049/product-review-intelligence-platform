@@ -1,34 +1,76 @@
 import { describe, it, expect } from "vitest";
-import { assertConnectionsAreDistinct, config, type AppConfig } from "../../src/config/index.js";
+import { assertDatabaseConfiguration, config, type AppConfig } from "../../src/config/index.js";
 
-function withOverrides(overrides: Partial<AppConfig["prodReadOnly"]>): AppConfig {
+function withAppStoreOverrides(overrides: Partial<AppConfig["appStore"]>): AppConfig {
   return {
     ...config,
-    prodReadOnly: { ...config.prodReadOnly, ...overrides },
+    appStore: { ...config.appStore, ...overrides },
   };
 }
 
-describe("assertConnectionsAreDistinct", () => {
-  it("passes for the real test configuration (appStore and prodReadOnly are genuinely different databases)", () => {
-    expect(() => assertConnectionsAreDistinct(config)).not.toThrow();
+describe("assertDatabaseConfiguration", () => {
+  it("passes for the real test configuration (test mode is lenient)", () => {
+    expect(() => assertDatabaseConfiguration(config)).not.toThrow();
   });
 
-  it("throws if host, database, and user all match the appStore connection", () => {
-    const badConfig = withOverrides({
-      host: config.appStore.host,
-      database: config.appStore.database,
-      user: config.appStore.user,
-    });
-    expect(() => assertConnectionsAreDistinct(badConfig)).toThrow(/Refusing to start/);
+  it("enforces strict checks only in production mode", () => {
+    const prodConfig = {
+      ...config,
+      nodeEnv: "production" as const,
+      appStore: { ...config.appStore, schema: "wrong_schema" },
+    };
+    expect(() => assertDatabaseConfiguration(prodConfig)).toThrow(/Schema must be 'DataWarehouse'/);
   });
 
-  it("does not throw if only host and database match but user differs", () => {
-    const almostBadConfig = withOverrides({
-      host: config.appStore.host,
-      database: config.appStore.database,
-      user: "a-different-user",
-    });
-    expect(() => assertConnectionsAreDistinct(almostBadConfig)).not.toThrow();
+  it("passes in test mode even with non-standard database names", () => {
+    const testConfig = {
+      ...config,
+      nodeEnv: "test" as const,
+      appStore: {
+        ...config.appStore,
+        schema: "product_review_intelligence",
+        database: "pri_test_appstore",
+        user: "test_user",
+        host: "wrong.example.com",
+      },
+    };
+    expect(() => assertDatabaseConfiguration(testConfig)).not.toThrow();
+  });
+
+  it("throws in production if schema is not DataWarehouse", () => {
+    const badConfig = {
+      ...config,
+      nodeEnv: "production" as const,
+      appStore: { ...config.appStore, schema: "product_review_intelligence" },
+    };
+    expect(() => assertDatabaseConfiguration(badConfig)).toThrow(/Schema must be 'DataWarehouse'/);
+  });
+
+  it("throws in production if database is not gbl_data_lake", () => {
+    const badConfig = {
+      ...config,
+      nodeEnv: "production" as const,
+      appStore: { ...config.appStore, database: "wrong_database" },
+    };
+    expect(() => assertDatabaseConfiguration(badConfig)).toThrow(/Database must be 'gbl_data_lake'/);
+  });
+
+  it("throws in production if host is not localhost", () => {
+    const badConfig = {
+      ...config,
+      nodeEnv: "production" as const,
+      appStore: { ...config.appStore, host: "prod.example.com" },
+    };
+    expect(() => assertDatabaseConfiguration(badConfig)).toThrow(/Host must be localhost/);
+  });
+
+  it("throws in production if user is not postgres", () => {
+    const badConfig = {
+      ...config,
+      nodeEnv: "production" as const,
+      appStore: { ...config.appStore, user: "wrong_user" },
+    };
+    expect(() => assertDatabaseConfiguration(badConfig)).toThrow(/User must be 'postgres'/);
   });
 });
 

@@ -1,0 +1,13 @@
+SET
+DELETE 50
+UPDATE 1
+              ?column?               
+-------------------------------------
+ Current watermark for myntra: 51200
+(1 row)
+
+            ?column?            
+--------------------------------
+ Test data in myntra_reviews: 0
+(1 row)
+

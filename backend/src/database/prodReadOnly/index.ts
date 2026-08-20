@@ -7,7 +7,6 @@
  * `Object.keys()` on this module's exports must equal exactly these four
  * names — see tests/security/prodReadOnlySurface.test.ts.
  */
-import { prodPool } from "./client.js";
 import * as flipkart from "./flipkartReviewsRepo.js";
 import * as myntra from "./myntraReviewsRepo.js";
 import type { RawFlipkartReview, RawMyntraReview } from "../../types/unifiedReview.js";
@@ -16,7 +15,7 @@ export async function getFlipkartReviewsPage(
   afterId: number,
   limit: number,
 ): Promise<RawFlipkartReview[]> {
-  return flipkart.getFlipkartReviewsPage(prodPool, afterId, limit);
+  return flipkart.getFlipkartReviewsPage(afterId, limit);
 }
 
 export async function getFlipkartReviewsByDateWindow(
@@ -24,14 +23,14 @@ export async function getFlipkartReviewsByDateWindow(
   afterId: number,
   limit: number,
 ): Promise<RawFlipkartReview[]> {
-  return flipkart.getFlipkartReviewsByDateWindow(prodPool, windowStart, afterId, limit);
+  return flipkart.getFlipkartReviewsByDateWindow(windowStart, afterId, limit);
 }
 
 export async function getMyntraReviewsPage(
   afterId: number,
   limit: number,
 ): Promise<RawMyntraReview[]> {
-  return myntra.getMyntraReviewsPage(prodPool, afterId, limit);
+  return myntra.getMyntraReviewsPage(afterId, limit);
 }
 
 export async function getMyntraReviewsByDateWindow(
@@ -39,5 +38,5 @@ export async function getMyntraReviewsByDateWindow(
   afterId: number,
   limit: number,
 ): Promise<RawMyntraReview[]> {
-  return myntra.getMyntraReviewsByDateWindow(prodPool, windowStart, afterId, limit);
+  return myntra.getMyntraReviewsByDateWindow(windowStart, afterId, limit);
 }

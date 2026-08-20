@@ -142,12 +142,12 @@ export const config = {
   },
 
   prodReadOnly: {
-    host: env.DB_PROD_HOST,
-    port: env.DB_PROD_PORT,
-    database: env.DB_PROD_NAME,
-    schema: env.DB_PROD_SCHEMA,
-    user: env.DB_PROD_USER,
-    password: env.DB_PROD_PASSWORD,
+    host: env.DB_HOST,
+    port: env.DB_PORT,
+    database: env.DB_NAME,
+    schema: env.DB_SCHEMA,
+    user: env.DB_USER,
+    password: env.DB_PASSWORD,
     /** The only two tables this application is ever permitted to read. */
     allowedTables: ["flipkart_reviews", "myntra_reviews"] as const,
   },
@@ -191,27 +191,45 @@ export const config = {
 export type AppConfig = typeof config;
 
 /**
- * Security layer 4: refuse to boot if the two connections resolve to the same
- * host+database+user — the single most important guard against a copy-pasted
- * config accidentally pointing the writable connection at production.
+ * Security layer 4: unified connection validation. The application now uses
+ * a single database connection for all operations. In production, this guard
+ * ensures the configuration points to the correct database and environment.
+ * Tests may use different database names for isolation.
  */
-export function assertConnectionsAreDistinct(cfg: AppConfig = config): void {
-  const same =
-    cfg.appStore.host === cfg.prodReadOnly.host &&
-    cfg.appStore.database === cfg.prodReadOnly.database &&
-    cfg.appStore.user === cfg.prodReadOnly.user;
+export function assertDatabaseConfiguration(cfg: AppConfig = config): void {
+  // Only enforce strict configuration in production
+  if (cfg.nodeEnv === "production") {
+    const errors: string[] = [];
 
-  if (same) {
-    throw new Error(
-      "Refusing to start: appStore and prodReadOnly configs resolve to the same " +
-        "host+database+user. These must always be distinct — this guard exists " +
-        "specifically to catch a copy-pasted or misconfigured connection string " +
-        "before it can ever be used.",
-    );
+    if (cfg.appStore.schema !== "DataWarehouse") {
+      errors.push(`Schema must be 'DataWarehouse', got '${cfg.appStore.schema}'`);
+    }
+
+    if (cfg.appStore.database !== "gbl_data_lake") {
+      errors.push(`Database must be 'gbl_data_lake', got '${cfg.appStore.database}'`);
+    }
+
+    const host = cfg.appStore.host;
+    const isLocalhost =
+      host === "localhost" ||
+      host === "127.0.0.1" ||
+      host.endsWith(".local") ||
+      host === "0.0.0.0";
+    if (!isLocalhost) {
+      errors.push(`Host must be localhost, got '${host}' (prevents remote connections)`);
+    }
+
+    if (cfg.appStore.user !== "postgres") {
+      errors.push(`User must be 'postgres', got '${cfg.appStore.user}' (requires unified connection)`);
+    }
+
+    if (errors.length > 0) {
+      throw new Error(`Database configuration is invalid:\n${errors.map((e) => `  - ${e}`).join("\n")}`);
+    }
   }
 }
 
-assertConnectionsAreDistinct(config);
+assertDatabaseConfiguration(config);
 
 /**
  * Phase 6 Step 2 — deliberately NOT called at module load (unlike

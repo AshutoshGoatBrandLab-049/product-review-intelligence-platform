@@ -1,0 +1,99 @@
+{
+  "timestamp": "2026-08-20T10:30:39.795Z",
+  "test": "Phase 3 Option A: In-Process Ingestion",
+  "option": "A",
+  "architecture": "Option A: In-process ingestion (same process, shared WebSocket singleton)",
+  "flowComplete": true,
+  "results": {
+    "sourceDataInserted": true,
+    "sourceRowCount": 100,
+    "ingestionRan": true,
+    "ingestionRowsProcessed": 129,
+    "dbCommitted": true,
+    "wsEventEmitted": true,
+    "wsEventCount": 12,
+    "browserReceivedEvent": true,
+    "browserEventCount": 12,
+    "apiRefreshTriggered": false,
+    "apiCallCount": 0,
+    "uiUpdatedWithoutReload": true,
+    "scrollPreserved": true,
+    "urlPreserved": true
+  },
+  "wsMessages": [
+    {
+      "type": "CONNECTION",
+      "timestamp": "2026-08-20T10:30:18.698Z"
+    },
+    {
+      "type": "CONNECTION",
+      "timestamp": "2026-08-20T10:30:18.698Z"
+    },
+    {
+      "type": "PRODUCT_DATA_UPDATED",
+      "platform": "myntra",
+      "timestamp": "2026-08-20T10:30:20.994Z"
+    },
+    {
+      "type": "PRODUCT_DATA_UPDATED",
+      "platform": "myntra",
+      "timestamp": "2026-08-20T10:30:20.997Z"
+    },
+    {
+      "type": "PRODUCT_DATA_UPDATED",
+      "platform": "myntra",
+      "timestamp": "2026-08-20T10:30:20.998Z"
+    },
+    {
+      "type": "PRODUCT_DATA_UPDATED",
+      "platform": "myntra",
+      "timestamp": "2026-08-20T10:30:21.000Z"
+    },
+    {
+      "type": "PRODUCT_DATA_UPDATED",
+      "platform": "myntra",
+      "timestamp": "2026-08-20T10:30:21.001Z"
+    },
+    {
+      "type": "PRODUCT_DATA_UPDATED",
+      "platform": "myntra",
+      "timestamp": "2026-08-20T10:30:21.002Z"
+    },
+    {
+      "type": "PRODUCT_DATA_UPDATED",
+      "platform": "myntra",
+      "timestamp": "2026-08-20T10:30:21.002Z"
+    },
+    {
+      "type": "PRODUCT_DATA_UPDATED",
+      "platform": "myntra",
+      "timestamp": "2026-08-20T10:30:21.002Z"
+    },
+    {
+      "type": "PRODUCT_DATA_UPDATED",
+      "platform": "myntra",
+      "timestamp": "2026-08-20T10:30:21.003Z"
+    },
+    {
+      "type": "PRODUCT_DATA_UPDATED",
+      "platform": "myntra",
+      "timestamp": "2026-08-20T10:30:21.003Z"
+    },
+    {
+      "type": "PRODUCT_DATA_UPDATED",
+      "platform": "myntra",
+      "timestamp": "2026-08-20T10:30:21.003Z"
+    },
+    {
+      "type": "PRODUCT_DATA_UPDATED",
+      "platform": "myntra",
+      "timestamp": "2026-08-20T10:30:21.003Z"
+    }
+  ],
+  "eventSummary": {
+    "total": 14,
+    "connection": 2,
+    "productDataUpdated": 12
+  },
+  "consoleLogs": 38
+}

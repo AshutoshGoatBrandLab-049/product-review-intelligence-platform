@@ -1,0 +1,46 @@
+{
+  "timestamp": "2026-08-20T10:05:20.172Z",
+  "test": "Phase 3 Complete Verification",
+  "testResults": {
+    "sourceDataInserted": true,
+    "wsEventReceived": false,
+    "apiRefreshDetected": false,
+    "noPageReload": true,
+    "scrollPreserved": true
+  },
+  "wsMessages": [
+    {
+      "timestamp": "2026-08-20T10:05:05.258Z"
+    },
+    {
+      "timestamp": "2026-08-20T10:05:05.260Z"
+    },
+    {
+      "timestamp": "2026-08-20T10:05:05.465Z"
+    },
+    {
+      "timestamp": "2026-08-20T10:05:09.040Z"
+    },
+    {
+      "timestamp": "2026-08-20T10:05:09.173Z"
+    }
+  ],
+  "apiCalls": [],
+  "statePreservation": {
+    "initialUrl": "http://localhost:5173/reviews-overview/myntra/negative",
+    "finalUrl": "http://localhost:5173/reviews-overview/myntra/negative",
+    "urlPreserved": true,
+    "initialScrollY": 0,
+    "finalScrollY": 0,
+    "scrollPreserved": true
+  },
+  "filesGenerated": [
+    "00-source-before.txt",
+    "01-before-websocket.png",
+    "02-insert-result.txt",
+    "03-ingestion.log",
+    "04-after-ingestion.png",
+    "05-database-after.txt",
+    "06-evidence-summary.json"
+  ]
+}
