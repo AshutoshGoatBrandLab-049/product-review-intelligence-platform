@@ -1,13 +1,28 @@
 /**
- * Points every test at fully isolated local databases — NEVER the real
- * gbl_data_lake (which has a pre-existing "DataWarehouse" schema this
- * project didn't create and doesn't touch) and NEVER real production.
+ * Points every test at ONE fully isolated local database — NEVER the real
+ * gbl_data_lake, and NEVER real production.
  *
- *   pri_test_appstore   — mirrors the local application store
- *   pri_test_prodsource — a local fixture mirroring flipkart_reviews /
- *                         myntra_reviews' verified shape, read via a local
- *                         role (local_review_intel_ro) that mirrors
- *                         review_intel_ro's SELECT-only grants exactly.
+ *   pri_test_appstore.product_review_intelligence
+ *     ├── flipkart_reviews       ← SOURCE (only two source tables that exist)
+ *     ├── myntra_reviews         ← SOURCE
+ *     ├── normalized_reviews     ← canonical
+ *     ├── product_dimension      ← derived
+ *     ├── product_daily_metrics  ← derived
+ *     └── ingestion_watermarks   ← derived
+ *
+ * SINGLE DATABASE, SINGLE SCHEMA — deliberately mirroring production, where
+ * gbl_data_lake."DataWarehouse" co-locates source and canonical tables and the
+ * application reaches all of them through one connection (config.appStore /
+ * appSequelize). An earlier two-database split (pri_test_prodsource, read via
+ * DB_PROD_*) predates that unification and no longer matches the code: since
+ * the repos switched to appSequelize, nothing connects using DB_PROD_* at all,
+ * so source tables parked in a second database were unreachable and every
+ * ingestion test failed with `relation ... does not exist`.
+ *
+ * Source-table DDL, indexes, constraints, defaults and data types were verified
+ * column-by-column against live gbl_data_lake."DataWarehouse" (2026-08-20) and
+ * are created from src/database/fixtures/sourceTablesFixture.sql. Row data is a
+ * COPY of the real marketplace data; the live database is only ever read.
  *
  * Automated tests do not, and must not, depend on real production access.
  */
@@ -19,12 +34,17 @@ process.env.DB_USER = "postgres";
 process.env.DB_PASSWORD = "1234";
 process.env.DB_SCHEMA = "product_review_intelligence";
 
+// DB_PROD_* is legacy: config/index.ts still validates these vars, but
+// config.prodReadOnly is built from DB_* (see config/index.ts) and prodPool is
+// never imported anywhere, so nothing connects with them. They are set here
+// only to satisfy schema validation — pointing them at the same single test
+// database makes it explicit that no second connection exists.
 process.env.DB_PROD_HOST = "localhost";
 process.env.DB_PROD_PORT = "5432";
-process.env.DB_PROD_NAME = "pri_test_prodsource";
+process.env.DB_PROD_NAME = "pri_test_appstore";
 process.env.DB_PROD_SCHEMA = "DataWarehouse";
-process.env.DB_PROD_USER = "local_review_intel_ro";
-process.env.DB_PROD_PASSWORD = "local_ro_test";
+process.env.DB_PROD_USER = "postgres";
+process.env.DB_PROD_PASSWORD = "1234";
 
 process.env.NODE_ENV = "test";
 process.env.LOG_LEVEL = "error";

@@ -20,6 +20,7 @@ import type { Platform } from "../../types/unifiedReview.js";
 export interface ProductRankingRow {
   sourceProductId: string;
   platform: Platform;
+  brand: string;
   rank: number;
   positiveCount: number;
   negativeCount: number;
@@ -28,17 +29,31 @@ export interface ProductRankingRow {
   averageRating: number;
 }
 
+interface DateRangeFilter {
+  fromDate: string;
+  toDate: string;
+}
+
+type SortOrder = "ratingAsc" | "ratingDesc" | "default";
+
 /**
- * Get products ranked by negative review count in their latest 10 reviews.
+ * Get products ranked by negative review count in their latest N reviews.
  * Worst-first ranking: most bad reviews = rank 1
- * Uses getLatestNAverageRating to ensure consistent average_rating calculation.
+ * Uses getLatestNAverageRating for latest-N or getDateRangeAverageRating for custom date range.
+ *
+ * sortBy: "ratingAsc" = lowest avg first, "ratingDesc" = highest avg first, "default" = default sort
  */
 export async function getProductsRankedByNegativeReviews(
   platform: Platform,
   limit: number = 100,
   offset: number = 0,
+  reviewLimit: number = 10,
+  dateRange?: DateRangeFilter,
+  sortBy: SortOrder = "default",
 ): Promise<{ products: ProductRankingRow[]; total: number }> {
   const schema = config.appStore.schema;
+
+  console.log(`[DB-QUERY] getProductsRankedByNegativeReviews: platform=${platform}, reviewLimit=${reviewLimit}, dateRange=${JSON.stringify(dateRange)}`);
 
   // Get all unique products for the platform
   const allProductsQuery = `
@@ -53,10 +68,13 @@ ORDER BY source_product_id
     type: QueryTypes.SELECT,
   })) as Array<{ source_product_id: string }>;
 
-  // For each product, get its latest-10 average rating
+  console.log(`[DB-QUERY] Found ${allProductsResult.length} unique products for platform ${platform}`);
+
+  // For each product, get average rating for selected review window
   const products: Array<{
     sourceProductId: string;
     platform: Platform;
+    brand: string;
     rank: number;
     positiveCount: number;
     negativeCount: number;
@@ -66,26 +84,54 @@ ORDER BY source_product_id
   }> = [];
 
   for (const row of allProductsResult) {
-    const { averageRating, reviewCount } = await getLatestNAverageRating(platform, row.source_product_id, 10);
-    products.push({
-      sourceProductId: row.source_product_id,
-      platform,
-      rank: 0, // Will be set after sorting
-      positiveCount: 0,
-      negativeCount: 0,
-      neutralCount: 0,
-      totalInLatestTen: reviewCount,
-      averageRating: averageRating ?? 0,
-    });
+    const { averageRating, reviewCount } = dateRange
+      ? await getDateRangeAverageRating(platform, row.source_product_id, dateRange.fromDate, dateRange.toDate)
+      : await getLatestNAverageRating(platform, row.source_product_id, reviewLimit);
+
+    // CRITICAL: Only include products with averageRating < 3.0 in negative rankings
+    // Products with >= 3.0 belong ONLY in positive rankings
+    if (averageRating !== null && averageRating < 3.0) {
+      const brand = await getBrandForProduct(platform, row.source_product_id);
+      products.push({
+        sourceProductId: row.source_product_id,
+        platform,
+        brand,
+        rank: 0,
+        positiveCount: 0,
+        negativeCount: 0,
+        neutralCount: 0,
+        totalInLatestTen: reviewCount,
+        averageRating: averageRating ?? 0,
+      });
+    }
   }
 
-  // Sort by average rating ASC (negative ranking: worst first), source_product_id ASC
-  products.sort((a, b) => {
-    if (a.averageRating !== b.averageRating) {
-      return a.averageRating - b.averageRating;
-    }
-    return a.sourceProductId.localeCompare(b.sourceProductId);
-  });
+  // Sort based on sortBy parameter
+  if (sortBy === "ratingAsc") {
+    // Lowest rating first
+    products.sort((a, b) => {
+      if (a.averageRating !== b.averageRating) {
+        return a.averageRating - b.averageRating;
+      }
+      return a.sourceProductId.localeCompare(b.sourceProductId);
+    });
+  } else if (sortBy === "ratingDesc") {
+    // Highest rating first
+    products.sort((a, b) => {
+      if (b.averageRating !== a.averageRating) {
+        return b.averageRating - a.averageRating;
+      }
+      return a.sourceProductId.localeCompare(b.sourceProductId);
+    });
+  } else {
+    // default: worst rating first (ASC)
+    products.sort((a, b) => {
+      if (a.averageRating !== b.averageRating) {
+        return a.averageRating - b.averageRating;
+      }
+      return a.sourceProductId.localeCompare(b.sourceProductId);
+    });
+  }
 
   // Assign ranks
   products.forEach((p, i) => {
@@ -94,6 +140,8 @@ ORDER BY source_product_id
 
   const total = products.length;
   const paginatedProducts = products.slice(offset, offset + limit);
+
+  console.log(`[DB-QUERY] Negative Results: total=${total}, returning=${paginatedProducts.length}, avgRatings=${paginatedProducts.map(p => p.averageRating).join(',')}`);
 
   return {
     products: paginatedProducts,
@@ -102,16 +150,23 @@ ORDER BY source_product_id
 }
 
 /**
- * Get products ranked by positive review count in their latest 10 reviews.
+ * Get products ranked by positive review count in their latest N reviews.
  * Best-first ranking: most good reviews = rank 1
- * Uses getLatestNAverageRating to ensure consistent average_rating calculation.
+ * Uses getLatestNAverageRating for latest-N or getDateRangeAverageRating for custom date range.
+ *
+ * sortBy: "ratingAsc" = lowest avg first, "ratingDesc" = highest avg first, "default" = default sort
  */
 export async function getProductsRankedByPositiveReviews(
   platform: Platform,
   limit: number = 100,
   offset: number = 0,
+  reviewLimit: number = 10,
+  dateRange?: DateRangeFilter,
+  sortBy: SortOrder = "default",
 ): Promise<{ products: ProductRankingRow[]; total: number }> {
   const schema = config.appStore.schema;
+
+  console.log(`[DB-QUERY] getProductsRankedByPositiveReviews: platform=${platform}, reviewLimit=${reviewLimit}, dateRange=${JSON.stringify(dateRange)}`);
 
   // Get all unique products for the platform
   const allProductsQuery = `
@@ -126,10 +181,13 @@ ORDER BY source_product_id
     type: QueryTypes.SELECT,
   })) as Array<{ source_product_id: string }>;
 
+  console.log(`[DB-QUERY] Found ${allProductsResult.length} unique products for platform ${platform}`);
+
   // For each product, get its latest-10 average rating
   const products: Array<{
     sourceProductId: string;
     platform: Platform;
+    brand: string;
     rank: number;
     positiveCount: number;
     negativeCount: number;
@@ -139,26 +197,54 @@ ORDER BY source_product_id
   }> = [];
 
   for (const row of allProductsResult) {
-    const { averageRating, reviewCount } = await getLatestNAverageRating(platform, row.source_product_id, 10);
-    products.push({
-      sourceProductId: row.source_product_id,
-      platform,
-      rank: 0, // Will be set after sorting
-      positiveCount: 0,
-      negativeCount: 0,
-      neutralCount: 0,
-      totalInLatestTen: reviewCount,
-      averageRating: averageRating ?? 0,
-    });
+    const { averageRating, reviewCount } = dateRange
+      ? await getDateRangeAverageRating(platform, row.source_product_id, dateRange.fromDate, dateRange.toDate)
+      : await getLatestNAverageRating(platform, row.source_product_id, reviewLimit);
+
+    // CRITICAL: Only include products with averageRating >= 3.0 in positive rankings
+    // Products with < 3.0 belong ONLY in negative rankings
+    if (averageRating !== null && averageRating >= 3.0) {
+      const brand = await getBrandForProduct(platform, row.source_product_id);
+      products.push({
+        sourceProductId: row.source_product_id,
+        platform,
+        brand,
+        rank: 0, // Will be set after sorting
+        positiveCount: 0,
+        negativeCount: 0,
+        neutralCount: 0,
+        totalInLatestTen: reviewCount,
+        averageRating: averageRating ?? 0,
+      });
+    }
   }
 
-  // Sort by average rating DESC, source_product_id ASC
-  products.sort((a, b) => {
-    if (b.averageRating !== a.averageRating) {
-      return b.averageRating - a.averageRating;
-    }
-    return a.sourceProductId.localeCompare(b.sourceProductId);
-  });
+  // Sort based on sortBy parameter
+  if (sortBy === "ratingAsc") {
+    // Lowest rating first
+    products.sort((a, b) => {
+      if (a.averageRating !== b.averageRating) {
+        return a.averageRating - b.averageRating;
+      }
+      return a.sourceProductId.localeCompare(b.sourceProductId);
+    });
+  } else if (sortBy === "ratingDesc") {
+    // Highest rating first
+    products.sort((a, b) => {
+      if (b.averageRating !== a.averageRating) {
+        return b.averageRating - a.averageRating;
+      }
+      return a.sourceProductId.localeCompare(b.sourceProductId);
+    });
+  } else {
+    // default: best rating first (DESC)
+    products.sort((a, b) => {
+      if (b.averageRating !== a.averageRating) {
+        return b.averageRating - a.averageRating;
+      }
+      return a.sourceProductId.localeCompare(b.sourceProductId);
+    });
+  }
 
   // Assign ranks
   products.forEach((p, i) => {
@@ -168,10 +254,83 @@ ORDER BY source_product_id
   const total = products.length;
   const paginatedProducts = products.slice(offset, offset + limit);
 
+  console.log(`[DB-QUERY] Positive Results: total=${total}, returning=${paginatedProducts.length}, avgRatings=${paginatedProducts.map(p => p.averageRating).join(',')}`);
+
   return {
     products: paginatedProducts,
     total,
   };
+}
+
+/**
+ * Get average rating for reviews within a custom date range.
+ * Returns only reviews where review_date falls within [fromDate, toDate] inclusive.
+ * Used by ProductRankingList when user selects custom date range.
+ * Returns null if product has no reviews in the date range.
+ */
+export async function getDateRangeAverageRating(
+  platform: Platform,
+  sourceProductId: string,
+  fromDate: string,
+  toDate: string
+): Promise<{ averageRating: number | null; reviewCount: number }> {
+  const schema = config.appStore.schema;
+
+  const query = `
+SELECT
+  COUNT(*) as total_reviews,
+  CAST(AVG(rating)::numeric AS DECIMAL(10,2)) as average_rating
+FROM "${schema}".normalized_reviews nr
+WHERE nr.platform = :platform
+  AND nr.source_product_id = :sourceProductId
+  AND nr.review_date >= :fromDate::date
+  AND nr.review_date <= :toDate::date
+  `;
+
+  const result = (await appSequelize.query(query, {
+    replacements: { platform, sourceProductId, fromDate, toDate },
+    type: QueryTypes.SELECT,
+  })) as Array<{
+    total_reviews: string;
+    average_rating: number | null;
+  }>;
+
+  const row = result[0];
+  if (!row) {
+    return { averageRating: null, reviewCount: 0 };
+  }
+
+  return {
+    averageRating: row.average_rating !== null ? Number(row.average_rating) : null,
+    reviewCount: Number(row.total_reviews),
+  };
+}
+
+/**
+ * Get the brand name for a product (most recent brand from reviews)
+ * Returns "Unknown Brand" if brand data is not available
+ */
+async function getBrandForProduct(
+  platform: Platform,
+  sourceProductId: string
+): Promise<string> {
+  const schema = config.appStore.schema;
+
+  const query = `
+SELECT nr.brand
+FROM "${schema}".normalized_reviews nr
+WHERE nr.platform = :platform AND nr.source_product_id = :sourceProductId
+  AND nr.brand IS NOT NULL
+ORDER BY COALESCE(nr.review_timestamp, nr.review_date::timestamp) DESC
+LIMIT 1
+  `;
+
+  const result = (await appSequelize.query(query, {
+    replacements: { platform, sourceProductId },
+    type: QueryTypes.SELECT,
+  })) as Array<{ brand: string }>;
+
+  return result[0]?.brand ?? "Unknown Brand";
 }
 
 /**
@@ -223,7 +382,7 @@ FROM latest_n
   }
 
   return {
-    averageRating: row.average_rating,
+    averageRating: row.average_rating !== null ? Number(row.average_rating) : null,
     reviewCount: Number(row.total_reviews),
   };
 }

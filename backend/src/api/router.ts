@@ -151,5 +151,22 @@ apiRouter.get(
 apiRouter.get("/v1/system/ingestion-status", authenticate, adminOnly, asyncHandler(getIngestionStatus));
 apiRouter.get("/v1/system/ai-usage", authenticate, adminOnly, asyncHandler(getAiUsage));
 
-// Internal ingestion endpoints (for Options B & C)
-apiRouter.use("/internal", ingestionRouter);
+/**
+ * Internal ingestion endpoints — admin-only.
+ *
+ * These were previously mounted with NO auth at all, unlike every other route in
+ * this file. POST /internal/ingestion/trigger runs a full ingestion cycle,
+ * including the replacement path that deletes and rebuilds canonical data, so an
+ * unauthenticated caller who could reach the port could destroy and rewrite the
+ * dataset. Ingestion is at least as privileged as the read-only system endpoints
+ * above, so it gets the same authenticate + adminOnly treatment.
+ *
+ * /internal/ingestion/health stays open: it reports readiness only, exposes no
+ * data, and is the kind of endpoint a load balancer probes without credentials.
+ */
+apiRouter.use("/internal", (req, res, next) => {
+  if (req.path === "/ingestion/health") return next();
+  return authenticate(req, res, (err?: unknown) =>
+    err ? next(err) : adminOnly(req, res, next),
+  );
+}, ingestionRouter);

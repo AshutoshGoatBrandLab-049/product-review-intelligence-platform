@@ -27,6 +27,7 @@ const ProductRowMemo = memo(function ProductRow({ product, type, loading, onProd
     <TableRow key={product.sourceProductId} className="hover:bg-slate-800/50">
       <TableCell className="font-bold text-purple-300">#{product.rank}</TableCell>
       <TableCell className="font-mono text-sm">{product.sourceProductId}</TableCell>
+      <TableCell className="font-semibold text-blue-300">{product.brand}</TableCell>
       <TableCell className="capitalize">{product.platform}</TableCell>
       <TableCell className="text-right">{ratingValue.toFixed(1)}</TableCell>
       <TableCell className="text-right font-semibold">{displayPercent}%</TableCell>
@@ -57,6 +58,89 @@ const ProductRowMemo = memo(function ProductRow({ product, type, loading, onProd
   );
 });
 
+interface CustomDateRangeInputProps {
+  fromDate: string;
+  toDate: string;
+  platform: string | undefined;
+  type: string | undefined;
+  sortBy: "default" | "ratingAsc" | "ratingDesc";
+  onFromDateChange: (value: string) => void;
+  onToDateChange: (value: string) => void;
+  onApply: () => void;
+  onCancel: () => void;
+}
+
+const CustomDateRangeInput = memo(function CustomDateRange({
+  fromDate,
+  toDate,
+  platform,
+  type,
+  sortBy,
+  onFromDateChange,
+  onToDateChange,
+  onApply,
+  onCancel,
+}: CustomDateRangeInputProps) {
+  return (
+    <div className="mt-6 pt-6 border-t border-slate-600">
+      <div className="space-y-4">
+        <p className="text-sm font-bold text-gray-200 uppercase tracking-wide">📆 Custom Date Range</p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="text-xs font-semibold text-gray-300 block mb-2">
+              From Date {fromDate && <span className="text-purple-300">✓ {fromDate}</span>}
+            </label>
+            <input
+              type="date"
+              value={fromDate}
+              onChange={(e) => onFromDateChange(e.target.value)}
+              className="w-full px-4 py-3 rounded-lg bg-slate-700 text-white border-2 border-slate-600 hover:border-purple-500 focus:border-purple-500 outline-none transition-colors cursor-pointer"
+              style={{
+                colorScheme: "dark"
+              }}
+            />
+          </div>
+          <div>
+            <label className="text-xs font-semibold text-gray-300 block mb-2">
+              To Date {toDate && <span className="text-purple-300">✓ {toDate}</span>}
+            </label>
+            <input
+              type="date"
+              value={toDate}
+              onChange={(e) => onToDateChange(e.target.value)}
+              className="w-full px-4 py-3 rounded-lg bg-slate-700 text-white border-2 border-slate-600 hover:border-purple-500 focus:border-purple-500 outline-none transition-colors cursor-pointer"
+              style={{
+                colorScheme: "dark"
+              }}
+            />
+          </div>
+        </div>
+        <div className="flex gap-3 pt-2">
+          <button
+            onClick={onApply}
+            className="flex-1 px-6 py-3 rounded-lg bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 text-white font-bold transition-all"
+          >
+            ✓ Apply Date Range
+          </button>
+          <button
+            onClick={onCancel}
+            className="px-3 py-3 rounded-lg bg-slate-600/50 hover:bg-slate-600 text-gray-300 font-medium transition-colors"
+            title="Clear custom date range"
+          >
+            ✕
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+});
+
+interface ReviewWindowState {
+  windowType: "latest10" | "latest20" | "latest50" | "latest100" | "custom";
+  customFromDate?: string;
+  customToDate?: string;
+}
+
 interface ListState {
   data: ReviewsOverviewResponse | null;
   loading: boolean;
@@ -75,16 +159,27 @@ export function ProductRankingList() {
   const pageFromUrl = parseInt(searchParams.get("page") || "0", 10);
   const currentPage = Math.max(0, isNaN(pageFromUrl) ? 0 : pageFromUrl);
 
-  // Cache key for this ranking (static data, safe to cache)
-  const cacheKey = `ranking-${platform}-${type}-${currentPage}`;
+  // Review window state
+  const [reviewWindow, setReviewWindow] = useState<ReviewWindowState>({
+    windowType: "latest10",
+  });
+  const [customDateInputs, setCustomDateInputs] = useState({ fromDate: "", toDate: "" });
+  const [sortBy, setSortBy] = useState<"default" | "ratingAsc" | "ratingDesc">("default");
 
-  // Get cached data if available and fresh (5 min TTL)
+  // Cache key for this ranking - includes review window and sort order to prevent stale data collisions
+  const cacheKey = `ranking-${platform}-${type}-${currentPage}-${reviewWindow.windowType}${
+    reviewWindow.windowType === "custom"
+      ? `-${reviewWindow.customFromDate}-${reviewWindow.customToDate}`
+      : ""
+  }-${sortBy}`;
+
+  // Get cached data if available and fresh (30 second TTL for auto-refresh with new data)
   const getCachedData = () => {
     try {
       const cached = sessionStorage.getItem(cacheKey);
       if (cached) {
         const parsed = JSON.parse(cached);
-        if (Date.now() - parsed.timestamp < 5 * 60 * 1000) {
+        if (Date.now() - parsed.timestamp < 30 * 1000) {
           return parsed.data;
         }
       }
@@ -136,10 +231,30 @@ export function ProductRankingList() {
       try {
         if (!isMounted) return;
 
+        console.log("[🔄 FetchStart] reviewWindow state:", {
+          windowType: reviewWindow.windowType,
+          customFromDate: reviewWindow.customFromDate,
+          customToDate: reviewWindow.customToDate,
+          platform,
+          type,
+          page: currentPage,
+        });
+
         const result = await getReviewsOverview({
           platform: platform as "flipkart" | "myntra",
           type: type as "negative" | "positive",
           page: currentPage,
+          reviewWindow: reviewWindow.windowType,
+          customFromDate: reviewWindow.customFromDate,
+          customToDate: reviewWindow.customToDate,
+          sortBy: sortBy === "default" ? undefined : sortBy,
+        });
+
+        console.log("[✅ FetchSuccess] API returned data:", {
+          productCount: result.products.length,
+          totalProducts: result.pagination.total,
+          platform,
+          type,
         });
 
         if (isMounted) {
@@ -157,9 +272,25 @@ export function ProductRankingList() {
         }
       } catch (err) {
         if (isMounted) {
+          let errorMessage = "Error loading data";
+
+          // Check if it's an error with structured message
+          if (err instanceof Error) {
+            errorMessage = err.message;
+
+            // Log full error for debugging
+            console.error("[ProductRankingList] Fetch error details:", {
+              name: err.name,
+              message: err.message,
+              stack: err.stack,
+              fullError: err,
+            });
+          }
+
+          console.error("[ProductRankingList] Fetch error:", err);
           setState((prev) => ({
             ...prev,
-            error: err instanceof Error ? err.message : "Error loading data",
+            error: errorMessage,
             loading: false,
           }));
         }
@@ -172,7 +303,7 @@ export function ProductRankingList() {
     return () => {
       isMounted = false;
     };
-  }, [platform, type, currentPage, navigate, state.loading]);
+  }, [platform, type, currentPage, navigate, state.loading, reviewWindow, sortBy]);
 
   // ✅ RENDER IMMEDIATELY: Show data as soon as API returns
   // The skeleton feedback + fade animation masks any render jank
@@ -207,60 +338,47 @@ export function ProductRankingList() {
     }
   }, [state.data, state.loading, platform, type, currentPage]);
 
-  // Listen for WebSocket product updates
+  /**
+   * Listen for post-commit ingestion events.
+   *
+   * Deliberately does NOT require the updated product to already be on the
+   * current page. A source replacement swaps the whole dataset, so the products
+   * that need showing are precisely the ones absent from the stale list — an
+   * earlier version returned early on `productIndex === -1`, which meant a
+   * replacement produced no refresh at all and the UI kept serving ghosts.
+   *
+   * Every ranking cache entry for the platform is dropped (not just this page's
+   * key) because ranks, pagination and averages all shift when the dataset does.
+   */
   useWebSocketEvent("PRODUCT_DATA_UPDATED", (event) => {
-    console.log("[ProductRankingList] WebSocket event received:", {
-      eventPlatform: event.platform,
-      currentPlatform: platform,
-      hasStateData: !!state.data,
-      hasType: !!type
-    });
-    if (!platform || !type || !state.data) {
-      console.log("[ProductRankingList] Skipping event - missing required data");
-      return;
-    }
-    if (event.platform !== platform) {
-      console.log(`[ProductRankingList] Skipping event - platform mismatch: ${event.platform} !== ${platform}`);
-      return;
-    }
+    if (!platform || !type) return;
+    if (event.platform !== platform) return;
 
-    // Find the product in current cached data
-    const productIndex = state.data.products.findIndex(
-      (p) => p.sourceProductId === event.sourceProductId
-    );
-
-    if (productIndex === -1) return; // Product not on this page
-
-    // ✅ Invalidate the cache for this page to force refresh on next navigation
     try {
-      sessionStorage.removeItem(cacheKey);
-    } catch (e) {
-      // Silently ignore
+      const keysToDelete: string[] = [];
+      for (let i = 0; i < sessionStorage.length; i++) {
+        const key = sessionStorage.key(i);
+        if (key && key.startsWith(`ranking-${platform}-`)) keysToDelete.push(key);
+      }
+      keysToDelete.forEach((key) => sessionStorage.removeItem(key));
+    } catch {
+      // sessionStorage unavailable — the refetch below still corrects the view.
     }
 
-    // ✅ Update only the affected product row to show fresh data
-    // Fetch fresh data for just this product from server (or use optimistic update if needed)
-    setState((prev) => {
-      if (!prev.data) return prev;
-
-      // For now, mark as needing refresh by re-fetching the entire list
-      // This is the safest approach to ensure ProductRowMemo updates correctly
-      return prev;
-    });
-
-    // ✅ Force a silent refresh of the data
-    // Re-fetch with the same parameters to get fresh product stats
+    // Refetch the current view in place. No page reload, and pagination /
+    // filter / sort state is preserved because the same params are reused.
     const performRefresh = async () => {
-      console.log("[ProductRankingList] Calling getReviewsOverview to refresh data");
       try {
         const result = await getReviewsOverview({
           platform: platform as "flipkart" | "myntra",
           type: type as "negative" | "positive",
           page: currentPage,
+          reviewWindow: reviewWindow.windowType,
+          customFromDate: reviewWindow.customFromDate,
+          customToDate: reviewWindow.customToDate,
+          sortBy: sortBy === "default" ? undefined : sortBy,
         });
-        console.log("[ProductRankingList] API refresh completed");
-
-        setState((prev) => ({ ...prev, data: result, loading: false }));
+        setState((prev) => ({ ...prev, data: result, loading: false, showData: true }));
 
         // Update cache with fresh data
         try {
@@ -297,9 +415,34 @@ export function ProductRankingList() {
   const typeLabel = type === "negative" ? "Most Bad Reviews" : "Most Good Reviews";
   const typeIcon = type === "negative" ? "📉" : "📈";
 
+  // Helper functions for filter management
+  const resetAllFilters = () => {
+    setReviewWindow({ windowType: "latest10" });
+    setCustomDateInputs({ fromDate: "", toDate: "" });
+    setSortBy("default");
+    setSearchParams({ page: "0" });
+    setState(prev => ({ ...prev, data: null, loading: true }));
+  };
+
+  const resetReviewWindow = () => {
+    setReviewWindow({ windowType: "latest10" });
+    setCustomDateInputs({ fromDate: "", toDate: "" });
+    setSearchParams({ page: "0" });
+    setState(prev => ({ ...prev, data: null, loading: true }));
+  };
+
+  const resetSort = () => {
+    setSortBy("default");
+    setSearchParams({ page: "0" });
+    setState(prev => ({ ...prev, data: null, loading: true }));
+  };
+
+  // Check if any filters are active
+  const hasActiveFilters = reviewWindow.windowType !== "latest10" || sortBy !== "default";
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
-      <div className="relative max-w-5xl mx-auto px-6 py-12">
+      <div className="relative max-w-6xl mx-auto px-6 py-12">
         {/* Back button */}
         <button
           onClick={() => navigate(`/reviews-overview/${platform}`)}
@@ -311,17 +454,215 @@ export function ProductRankingList() {
 
         {/* Header */}
         <div className="mb-12">
-          <div className="flex items-center gap-4 mb-4">
+          <div className="flex items-center gap-4 mb-6">
             <span className="text-5xl">{typeIcon}</span>
             <div>
               <h1 className="text-5xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-gray-400">
                 {platformLabel} — {typeLabel}
               </h1>
               <p className="text-gray-400 mt-2">
-                Ranked by {type} sentiment • 100 products per page • Based on latest 10 reviews
+                Ranked by {type} sentiment • 100 products per page
               </p>
             </div>
           </div>
+        </div>
+
+        {/* OPTIMIZED COMPACT FILTER PANEL */}
+        <div className="mb-6 bg-slate-800/40 border border-slate-700 rounded-lg p-4 backdrop-blur-sm">
+          <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center gap-3">
+              <span className="text-lg font-bold text-white">🔍 Filters</span>
+              {hasActiveFilters && (
+                <span className="px-3 py-1 bg-purple-600/40 text-purple-200 text-sm rounded-full font-medium">
+                  {reviewWindow.windowType !== "latest10" ? "1" : "0"} + {sortBy !== "default" ? "1" : "0"} active
+                </span>
+              )}
+            </div>
+            {hasActiveFilters && (
+              <button
+                onClick={resetAllFilters}
+                className="px-4 py-2 rounded-lg bg-red-600/20 text-red-300 hover:bg-red-600/30 border border-red-600/50 transition-colors font-medium text-sm"
+                title="Clear all filters and reset to defaults"
+              >
+                ✕ Clear All
+              </button>
+            )}
+          </div>
+
+          {/* Filter Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Review Window Filter */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <label className="text-sm font-bold text-gray-200 uppercase tracking-wide">📅 Review Window</label>
+                {reviewWindow.windowType !== "latest10" && (
+                  <button
+                    onClick={resetReviewWindow}
+                    className="text-xs px-2 py-1 rounded bg-slate-600/50 text-gray-300 hover:bg-slate-600 transition-colors"
+                    title="Reset to Latest 10 Reviews"
+                  >
+                    Reset
+                  </button>
+                )}
+              </div>
+              <select
+                value={reviewWindow.windowType}
+                onChange={(e) => {
+                  const newWindowType = e.target.value as ReviewWindowState["windowType"];
+
+                  // If switching to custom, don't auto-fetch yet - wait for Apply button
+                  if (newWindowType === "custom") {
+                    setReviewWindow({ windowType: "custom" });
+                    return;
+                  }
+
+                  // For other window types, fetch immediately
+                  const newWindow: ReviewWindowState = { windowType: newWindowType };
+                  setReviewWindow(newWindow);
+                  setSearchParams({ page: "0" });
+                  setState(prev => ({ ...prev, data: null, loading: true }));
+                }}
+                className="w-full px-4 py-3 rounded-lg bg-slate-700 text-white border-2 border-slate-600 hover:border-purple-500 focus:border-purple-500 outline-none transition-colors font-medium"
+              >
+                <option value="latest10">📊 Latest 10 Reviews</option>
+                <option value="latest20">📊 Latest 20 Reviews</option>
+                <option value="latest50">📊 Latest 50 Reviews</option>
+                <option value="latest100">📊 Latest 100 Reviews</option>
+                <option value="custom">📆 Custom Date Range</option>
+              </select>
+              {reviewWindow.windowType === "latest10" && (
+                <p className="text-xs text-gray-400">✓ Default setting</p>
+              )}
+            </div>
+
+            {/* Sort Filter */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <label className="text-sm font-bold text-gray-200 uppercase tracking-wide">⬆️ Sort By Rating</label>
+                {sortBy !== "default" && (
+                  <button
+                    onClick={resetSort}
+                    className="text-xs px-2 py-1 rounded bg-slate-600/50 text-gray-300 hover:bg-slate-600 transition-colors"
+                    title="Reset to Default Sort"
+                  >
+                    Reset
+                  </button>
+                )}
+              </div>
+              <select
+                value={sortBy}
+                onChange={(e) => {
+                  setSortBy(e.target.value as "default" | "ratingAsc" | "ratingDesc");
+                  setSearchParams({ page: "0" });
+                  setState(prev => ({ ...prev, data: null, loading: true }));
+                }}
+                className="w-full px-4 py-3 rounded-lg bg-slate-700 text-white border-2 border-slate-600 hover:border-purple-500 focus:border-purple-500 outline-none transition-colors font-medium"
+              >
+                <option value="default">Natural Ranking (No Sort)</option>
+                <option value="ratingAsc">↑ Ascending (Low to High)</option>
+                <option value="ratingDesc">↓ Descending (High to Low)</option>
+              </select>
+              {sortBy === "default" && (
+                <p className="text-xs text-gray-400">
+                  ✓ {type === "negative" ? "Worst First" : "Best First"}
+                </p>
+              )}
+            </div>
+          </div>
+
+          {/* Custom Date Range Section */}
+          {reviewWindow.windowType === "custom" && (
+            <CustomDateRangeInput
+              fromDate={customDateInputs.fromDate}
+              toDate={customDateInputs.toDate}
+              platform={platform}
+              type={type}
+              sortBy={sortBy}
+              onFromDateChange={(val) => setCustomDateInputs(prev => ({ ...prev, fromDate: val }))}
+              onToDateChange={(val) => setCustomDateInputs(prev => ({ ...prev, toDate: val }))}
+              onApply={async () => {
+                const fromDate = customDateInputs.fromDate;
+                const toDate = customDateInputs.toDate;
+
+                try {
+                  const result = await getReviewsOverview({
+                    platform: platform as "flipkart" | "myntra",
+                    type: type as "negative" | "positive",
+                    page: 0,
+                    reviewWindow: "custom",
+                    customFromDate: fromDate,
+                    customToDate: toDate,
+                    sortBy: sortBy === "default" ? undefined : sortBy,
+                  });
+
+                  setState(prev => ({
+                    ...prev,
+                    data: result,
+                    loading: false,
+                    showData: true,
+                    error: null,
+                  }));
+
+                  setReviewWindow({
+                    windowType: "custom",
+                    customFromDate: fromDate,
+                    customToDate: toDate,
+                  });
+
+                  setSearchParams({ page: "0" });
+                } catch (err) {
+                  setState(prev => ({
+                    ...prev,
+                    error: err instanceof Error ? err.message : "Error loading data",
+                    loading: false,
+                  }));
+                }
+              }}
+              onCancel={() => {
+                setCustomDateInputs({ fromDate: "", toDate: "" });
+                resetReviewWindow();
+              }}
+            />
+          )}
+
+          {/* Active Filters Summary */}
+          {hasActiveFilters && (
+            <div className="mt-6 pt-6 border-t border-slate-600">
+              <p className="text-xs font-bold text-gray-300 uppercase mb-3">Active Filters</p>
+              <div className="flex flex-wrap gap-2">
+                {reviewWindow.windowType !== "latest10" && (
+                  <div className="px-3 py-1 rounded-full bg-purple-600/40 text-purple-200 text-sm flex items-center gap-2 border border-purple-600/50">
+                    <span>
+                      {reviewWindow.windowType === "custom"
+                        ? `📆 ${reviewWindow.customFromDate || "?"} to ${reviewWindow.customToDate || "?"}`
+                        : `📊 Latest ${reviewWindow.windowType.replace("latest", "")}`}
+                    </span>
+                    <button
+                      onClick={resetReviewWindow}
+                      className="ml-1 hover:text-purple-100 transition-colors"
+                      title="Remove this filter"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                )}
+                {sortBy !== "default" && (
+                  <div className="px-3 py-1 rounded-full bg-blue-600/40 text-blue-200 text-sm flex items-center gap-2 border border-blue-600/50">
+                    <span>
+                      {sortBy === "ratingAsc" ? "↑ Ascending" : "↓ Descending"}
+                    </span>
+                    <button
+                      onClick={resetSort}
+                      className="ml-1 hover:text-blue-100 transition-colors"
+                      title="Remove this filter"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Error State */}
@@ -339,6 +680,7 @@ export function ProductRankingList() {
               <TableRow>
                 <TableHead className="w-16">Rank</TableHead>
                 <TableHead>Product ID</TableHead>
+                <TableHead>Brand</TableHead>
                 <TableHead>Marketplace</TableHead>
                 <TableHead className="text-right">Avg Rating</TableHead>
                 <TableHead className="text-right">{type === "negative" ? "Negative %" : "Positive %"}</TableHead>
@@ -351,6 +693,7 @@ export function ProductRankingList() {
                 <TableRow key={`skeleton-${i}`} className="animate-pulse">
                   <TableCell><div className="h-4 bg-slate-700 rounded w-8"></div></TableCell>
                   <TableCell><div className="h-4 bg-slate-700 rounded w-24"></div></TableCell>
+                  <TableCell><div className="h-4 bg-slate-700 rounded w-20"></div></TableCell>
                   <TableCell><div className="h-4 bg-slate-700 rounded w-16"></div></TableCell>
                   <TableCell className="text-right"><div className="h-4 bg-slate-700 rounded w-12 ml-auto"></div></TableCell>
                   <TableCell className="text-right"><div className="h-4 bg-slate-700 rounded w-12 ml-auto"></div></TableCell>
@@ -379,6 +722,7 @@ export function ProductRankingList() {
                   <TableRow>
                     <TableHead className="w-16">Rank</TableHead>
                     <TableHead>Product ID</TableHead>
+                    <TableHead>Brand</TableHead>
                     <TableHead>Marketplace</TableHead>
                     <TableHead className="text-right">Avg Rating</TableHead>
                     <TableHead className="text-right">{type === "negative" ? "Negative %" : "Positive %"}</TableHead>

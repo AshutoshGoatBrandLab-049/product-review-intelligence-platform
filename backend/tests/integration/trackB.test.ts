@@ -24,7 +24,7 @@ const fixturePool = new Pool({
  */
 async function restoreFixtureRow(): Promise<void> {
   await fixturePool.query(
-    `UPDATE "DataWarehouse".flipkart_reviews
+    `UPDATE "${config.appStore.schema}".flipkart_reviews
      SET rating = 5, title = 'Great product', comment = 'Loved it, works perfectly',
          author_name = 'Ravi K', "updatedAt" = now()
      WHERE pid = 'PID001' AND review_id = 'fk_hash_0001'`,
@@ -61,7 +61,7 @@ describe("Track B — reconciliation", () => {
     // Simulate exactly what the real crawler does on every re-crawl: bump
     // updatedAt unconditionally, without changing any tracked content field.
     await fixturePool.query(
-      `UPDATE "DataWarehouse".flipkart_reviews SET "updatedAt" = now() WHERE pid = 'PID001'`,
+      `UPDATE "${config.appStore.schema}".flipkart_reviews SET "updatedAt" = now() WHERE pid = 'PID001'`,
     );
 
     const result = await runTrackB("flipkart");
@@ -73,7 +73,7 @@ describe("Track B — reconciliation", () => {
     await runTrackB("flipkart");
 
     await fixturePool.query(
-      `UPDATE "DataWarehouse".flipkart_reviews SET rating = 1, "updatedAt" = now() WHERE pid = 'PID001' AND review_id = 'fk_hash_0001'`,
+      `UPDATE "${config.appStore.schema}".flipkart_reviews SET rating = 1, "updatedAt" = now() WHERE pid = 'PID001' AND review_id = 'fk_hash_0001'`,
     );
 
     const result = await runTrackB("flipkart");
@@ -90,7 +90,7 @@ describe("Track B — reconciliation", () => {
 
     // Change author + title + rating together — the wholesale-swap heuristic.
     await fixturePool.query(
-      `UPDATE "DataWarehouse".flipkart_reviews
+      `UPDATE "${config.appStore.schema}".flipkart_reviews
        SET author_name = 'A Totally Different Person', title = 'Completely different title', rating = 1, "updatedAt" = now()
        WHERE pid = 'PID001' AND review_id = 'fk_hash_0001'`,
     );

@@ -31,6 +31,27 @@ const envSchema = z.object({
   INGEST_BATCH_SIZE: z.coerce.number().int().positive().default(5000),
   RECONCILE_LOOKBACK_DAYS: z.coerce.number().int().positive().default(60),
   RECONCILE_SAFETY_BUFFER_DAYS: z.coerce.number().int().nonnegative().default(10),
+  /**
+   * Track B scan strategy.
+   *
+   * "true"  — reconcile the ENTIRE source by id cursor (default).
+   * "false" — reconcile only reviews inside the RECONCILE_LOOKBACK_DAYS window.
+   *
+   * Defaults to a full scan because the windowed scan is silently lossy: Track A
+   * never revisits a row once its id is below the watermark, so an edit to a
+   * review older than the window reaches neither track and the canonical copy
+   * stays wrong indefinitely (verified — a 200-day-old review edited from rating
+   * 5 to 1 kept reporting 5). The window was only affordable-by-necessity when
+   * Track B issued one query per row; with batched lookups a full scan costs a
+   * handful of queries per run, so correctness no longer has to be traded away.
+   *
+   * Set to "false" only for a source large enough that the full scan becomes the
+   * bottleneck, accepting that older edits will be missed.
+   */
+  RECONCILE_FULL_SCAN: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
 
   // Phase 4 — AI provider. Defaults to "mock": this project must never
   // silently start making paid API calls just because it booted.
@@ -156,6 +177,7 @@ export const config = {
     batchSize: env.INGEST_BATCH_SIZE,
     reconcileLookbackDays: env.RECONCILE_LOOKBACK_DAYS,
     reconcileSafetyBufferDays: env.RECONCILE_SAFETY_BUFFER_DAYS,
+    reconcileFullScan: env.RECONCILE_FULL_SCAN,
   },
 
   ai: {

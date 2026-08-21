@@ -30,7 +30,7 @@ const fixturePool = new Pool({
 
 async function insertFlipkart(pid: string, reviewId: string, rating: number, daysAgo: number, brand: string): Promise<void> {
   await fixturePool.query(
-    `INSERT INTO "DataWarehouse".flipkart_reviews
+    `INSERT INTO "${config.appStore.schema}".flipkart_reviews
        (brand_name, pid, review_id, rating, title, comment, review_date, product_url, author_name, verified_purchase, helpful_count, country, "createdAt", "updatedAt")
      VALUES ($5, $1, $2, $3, 't', 'c', CURRENT_DATE - $4::int, 'u', 'a', true, 0, 'India', now(), now())`,
     [pid, reviewId, rating, daysAgo, brand],
@@ -39,7 +39,7 @@ async function insertFlipkart(pid: string, reviewId: string, rating: number, day
 
 async function insertMyntra(productId: number, reviewId: string, rating: number, daysAgo: number, brand: string): Promise<void> {
   await fixturePool.query(
-    `INSERT INTO "DataWarehouse".myntra_reviews
+    `INSERT INTO "${config.appStore.schema}".myntra_reviews
        (product_id, brand_name, review_id, rating, title, body, review_date, author_name, helpful_count, not_helpful_count, has_images, country, "createdAt", "updatedAt")
      VALUES ($1, $5, $2, $3, 't', 'b', CURRENT_DATE - $4::int, 'a', 0, 0, false, 'India', now(), now())`,
     [productId, reviewId, rating, daysAgo, brand],
@@ -125,8 +125,8 @@ describe("marketplace comparison (Phase 5 Step 7 — real DB integration)", () =
   });
 
   afterAll(async () => {
-    await fixturePool.query(`DELETE FROM "DataWarehouse".flipkart_reviews WHERE pid = $1`, [FK_PID]);
-    await fixturePool.query(`DELETE FROM "DataWarehouse".myntra_reviews WHERE product_id = $1`, [MY_PID]);
+    await fixturePool.query(`DELETE FROM "${config.appStore.schema}".flipkart_reviews WHERE pid = $1`, [FK_PID]);
+    await fixturePool.query(`DELETE FROM "${config.appStore.schema}".myntra_reviews WHERE product_id = $1`, [MY_PID]);
     // fixturePool stays open — it's shared with the product-family-mapping
     // describe block below, which closes it in its own afterAll.
   });
@@ -195,8 +195,8 @@ describe("product-family-mapping (Phase 5 Step 7 — gated product-level path, p
   });
 
   afterAll(async () => {
-    await fixturePool.query(`DELETE FROM "DataWarehouse".flipkart_reviews WHERE pid = $1`, [FK_PID]);
-    await fixturePool.query(`DELETE FROM "DataWarehouse".myntra_reviews WHERE product_id = $1`, [MY_PID]);
+    await fixturePool.query(`DELETE FROM "${config.appStore.schema}".flipkart_reviews WHERE pid = $1`, [FK_PID]);
+    await fixturePool.query(`DELETE FROM "${config.appStore.schema}".myntra_reviews WHERE product_id = $1`, [MY_PID]);
     await fixturePool.end();
   });
 

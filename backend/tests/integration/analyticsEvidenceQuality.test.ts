@@ -19,7 +19,7 @@ const fixturePool = new Pool({
 
 async function insertFlipkart(pid: string, reviewId: string, rating: number, daysAgo: number): Promise<void> {
   await fixturePool.query(
-    `INSERT INTO "DataWarehouse".flipkart_reviews
+    `INSERT INTO "${config.appStore.schema}".flipkart_reviews
        (brand_name, pid, review_id, rating, title, comment, review_date, product_url, author_name, verified_purchase, helpful_count, country, "createdAt", "updatedAt")
      VALUES ('B', $1, $2, $3, 't', 'c', CURRENT_DATE - $4::int, 'u', 'a', true, 0, 'India', now(), now())`,
     [pid, reviewId, rating, daysAgo],
@@ -43,7 +43,7 @@ describe("evidence, early warning, data quality (Phase 3 §16, §15, §20)", () 
 
     // Data quality: one malformed row (invalid rating) for reject-reporting.
     await fixturePool.query(
-      `INSERT INTO "DataWarehouse".flipkart_reviews
+      `INSERT INTO "${config.appStore.schema}".flipkart_reviews
          (brand_name, pid, review_id, rating, title, comment, review_date, product_url, author_name, verified_purchase, helpful_count, country, "createdAt", "updatedAt")
        VALUES ('B', $1, 'DQ-MALFORMED-1', 0, 't', 'c', CURRENT_DATE - 3, 'u', 'a', true, 0, 'India', now(), now())`,
       [malformedPid],
@@ -57,7 +57,7 @@ describe("evidence, early warning, data quality (Phase 3 §16, §15, §20)", () 
   });
 
   afterAll(async () => {
-    await fixturePool.query(`DELETE FROM "DataWarehouse".flipkart_reviews WHERE pid IN ($1, $2, $3)`, [evidencePid, warningPid, malformedPid]);
+    await fixturePool.query(`DELETE FROM "${config.appStore.schema}".flipkart_reviews WHERE pid IN ($1, $2, $3)`, [evidencePid, warningPid, malformedPid]);
     await fixturePool.end();
   });
 
@@ -119,7 +119,7 @@ describe("evidence, early warning, data quality (Phase 3 §16, §15, §20)", () 
   });
 
   it("data-quality report: surfaces reject reasons without silently excluding raw counts", async () => {
-    const { rows } = await fixturePool.query<{ count: string }>(`SELECT count(*)::text AS count FROM "DataWarehouse".flipkart_reviews`);
+    const { rows } = await fixturePool.query<{ count: string }>(`SELECT count(*)::text AS count FROM "${config.appStore.schema}".flipkart_reviews`);
     const sourceTotal = Number(rows[0]!.count);
 
     const report = await computeDataQualityReport("flipkart", WINDOW, sourceTotal);
@@ -130,7 +130,7 @@ describe("evidence, early warning, data quality (Phase 3 §16, §15, §20)", () 
   });
 
   it("data-quality report: flags low-sample products without dropping them", async () => {
-    const { rows } = await fixturePool.query<{ count: string }>(`SELECT count(*)::text AS count FROM "DataWarehouse".flipkart_reviews`);
+    const { rows } = await fixturePool.query<{ count: string }>(`SELECT count(*)::text AS count FROM "${config.appStore.schema}".flipkart_reviews`);
     const sourceTotal = Number(rows[0]!.count);
     const report = await computeDataQualityReport("flipkart", WINDOW, sourceTotal);
     expect(report.lowSampleProducts).toBeGreaterThanOrEqual(1);

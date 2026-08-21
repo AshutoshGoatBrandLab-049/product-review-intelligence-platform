@@ -25,7 +25,7 @@ const fixturePool = new Pool({
 
 async function insertFlipkart(pid: string, reviewId: string, rating: number, daysAgo: number): Promise<void> {
   await fixturePool.query(
-    `INSERT INTO "DataWarehouse".flipkart_reviews
+    `INSERT INTO "${config.appStore.schema}".flipkart_reviews
        (brand_name, pid, review_id, rating, title, comment, review_date, product_url, author_name, verified_purchase, helpful_count, country, "createdAt", "updatedAt")
      VALUES ('EWBrand', $1, $2, $3, 't', 'c', CURRENT_DATE - $4::int, 'u', 'a', true, 0, 'India', now(), now())`,
     [pid, reviewId, rating, daysAgo],
@@ -99,7 +99,7 @@ describe("early warning signals (Phase 5 Step 7 — dedicated rule-engine covera
   });
 
   afterAll(async () => {
-    await fixturePool.query(`DELETE FROM "DataWarehouse".flipkart_reviews WHERE pid = ANY($1)`, [ALL_PIDS]);
+    await fixturePool.query(`DELETE FROM "${config.appStore.schema}".flipkart_reviews WHERE pid = ANY($1)`, [ALL_PIDS]);
     await fixturePool.end();
   });
 

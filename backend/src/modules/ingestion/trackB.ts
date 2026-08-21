@@ -93,8 +93,13 @@ export async function runTrackB(platform: Platform, jobId: string = randomUUID()
   try {
     for (;;) {
       const batchStartedAt = Date.now();
-      const rawRows =
-        platform === "flipkart"
+      // Full scan by default — see config.ingestion.reconcileFullScan for why the
+      // date-windowed variant is lossy. Both walk the same indexed id cursor.
+      const rawRows = config.ingestion.reconcileFullScan
+        ? platform === "flipkart"
+          ? await prodReadOnly.getFlipkartReviewsPage(afterId, batchSize)
+          : await prodReadOnly.getMyntraReviewsPage(afterId, batchSize)
+        : platform === "flipkart"
           ? await prodReadOnly.getFlipkartReviewsByDateWindow(windowStart, afterId, batchSize)
           : await prodReadOnly.getMyntraReviewsByDateWindow(windowStart, afterId, batchSize);
 
@@ -105,6 +110,12 @@ export async function runTrackB(platform: Platform, jobId: string = randomUUID()
 
       const batchAffectedProducts = new Map<string, AffectedProduct>();
 
+      // Map + validate the whole batch FIRST, so the canonical rows it needs can
+      // be fetched in ONE query instead of one per review. The previous shape
+      // issued a findByPk per row — 30,733 sequential round-trips against real
+      // data, which is what made a full-table reconciliation unaffordable and so
+      // kept the scan pinned to a narrow date window.
+      const prepared: Array<{ review: UnifiedReview; canonicalReviewId: string; freshHash: string }> = [];
       for (const raw of rawRows) {
         const review = mapRawRow(platform, raw);
         const validation = validateUnifiedReview(review);
@@ -122,14 +133,29 @@ export async function runTrackB(platform: Platform, jobId: string = randomUUID()
           continue;
         }
 
-        const canonicalReviewId = computeCanonicalReviewId(
-          review.platform,
-          review.sourceProductId,
-          review.sourceReviewId,
-        );
-        const freshHash = computeContentHash(review);
+        prepared.push({
+          review,
+          canonicalReviewId: computeCanonicalReviewId(
+            review.platform,
+            review.sourceProductId,
+            review.sourceReviewId,
+          ),
+          freshHash: computeContentHash(review),
+        });
+      }
 
-        const existing = await NormalizedReview.findByPk(canonicalReviewId);
+      // One round-trip for the batch. Model instances, not plain rows, so the
+      // existing `existing.update(...)` path below is unchanged.
+      const existingRows =
+        prepared.length === 0
+          ? []
+          : await NormalizedReview.findAll({
+              where: { canonicalReviewId: prepared.map((p) => p.canonicalReviewId) },
+            });
+      const existingById = new Map(existingRows.map((r) => [r.canonicalReviewId, r]));
+
+      for (const { review, canonicalReviewId, freshHash } of prepared) {
+        const existing = existingById.get(canonicalReviewId);
 
         if (!existing) {
           // DISCOVERY: new review found — wrap in transaction for synchronization

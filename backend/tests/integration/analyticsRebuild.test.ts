@@ -93,7 +93,7 @@ describe("analytics rebuild — determinism and no double counting (Phase 3 §17
     const before = await sumDailyReviewCount("flipkart");
 
     // Bump updatedAt on the baseline fixture row without changing content.
-    await fixturePool.query(`UPDATE "DataWarehouse".flipkart_reviews SET "updatedAt" = now() WHERE pid = 'PID001'`);
+    await fixturePool.query(`UPDATE "${config.appStore.schema}".flipkart_reviews SET "updatedAt" = now() WHERE pid = 'PID001'`);
     await runTrackB("flipkart");
     await rebuildAnalytics();
 
@@ -103,12 +103,12 @@ describe("analytics rebuild — determinism and no double counting (Phase 3 §17
 
   it("review_date remains the historical bucket after an updatedAt-only change (never moves to today)", async () => {
     await runTrackA("flipkart");
-    await fixturePool.query(`UPDATE "DataWarehouse".flipkart_reviews SET "updatedAt" = now() WHERE pid = 'PID001' AND review_id = 'fk_hash_0001'`);
+    await fixturePool.query(`UPDATE "${config.appStore.schema}".flipkart_reviews SET "updatedAt" = now() WHERE pid = 'PID001' AND review_id = 'fk_hash_0001'`);
     await runTrackB("flipkart");
     await rebuildAnalytics();
 
     const { rows } = await fixturePool.query<{ review_date: string }>(
-      `SELECT review_date::text FROM "DataWarehouse".flipkart_reviews WHERE pid = 'PID001' AND review_id = 'fk_hash_0001'`,
+      `SELECT review_date::text FROM "${config.appStore.schema}".flipkart_reviews WHERE pid = 'PID001' AND review_id = 'fk_hash_0001'`,
     );
     const originalReviewDate = rows[0]!.review_date;
 
@@ -132,13 +132,13 @@ describe("analytics rebuild — determinism and no double counting (Phase 3 §17
     await runTrackB("flipkart");
 
     await fixturePool.query(
-      `UPDATE "DataWarehouse".flipkart_reviews SET rating = 1, "updatedAt" = now() WHERE pid = 'PID001' AND review_id = 'fk_hash_0001'`,
+      `UPDATE "${config.appStore.schema}".flipkart_reviews SET rating = 1, "updatedAt" = now() WHERE pid = 'PID001' AND review_id = 'fk_hash_0001'`,
     );
     await runTrackB("flipkart");
     await rebuildAnalytics();
 
     const { rows } = await fixturePool.query<{ review_date: string }>(
-      `SELECT review_date::text FROM "DataWarehouse".flipkart_reviews WHERE pid = 'PID001' AND review_id = 'fk_hash_0001'`,
+      `SELECT review_date::text FROM "${config.appStore.schema}".flipkart_reviews WHERE pid = 'PID001' AND review_id = 'fk_hash_0001'`,
     );
     const bucket = await ProductDailyMetrics.findOne({
       where: { platform: "flipkart", sourceProductId: "PID001", reviewDate: rows[0]!.review_date },
@@ -151,7 +151,7 @@ describe("analytics rebuild — determinism and no double counting (Phase 3 §17
 
     // Restore for other tests sharing this fixture row.
     await fixturePool.query(
-      `UPDATE "DataWarehouse".flipkart_reviews SET rating = 5, "updatedAt" = now() WHERE pid = 'PID001' AND review_id = 'fk_hash_0001'`,
+      `UPDATE "${config.appStore.schema}".flipkart_reviews SET rating = 5, "updatedAt" = now() WHERE pid = 'PID001' AND review_id = 'fk_hash_0001'`,
     );
   });
 

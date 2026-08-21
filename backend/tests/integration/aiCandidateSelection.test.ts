@@ -48,7 +48,7 @@ describe("AI candidate selection & staleness (Phase 4 §7)", () => {
     const provider = new MockAiProvider();
     await runAiSentimentPipeline({ platform: "flipkart", dryRun: false }, provider);
 
-    await fixturePool.query(`UPDATE "DataWarehouse".flipkart_reviews SET "updatedAt" = now() WHERE pid = 'PID001'`);
+    await fixturePool.query(`UPDATE "${config.appStore.schema}".flipkart_reviews SET "updatedAt" = now() WHERE pid = 'PID001'`);
     await runTrackB("flipkart"); // re-syncs normalized_reviews; content_hash is unaffected by updatedAt
 
     const summary = await summarizeCandidates({ platform: "flipkart" });
@@ -62,7 +62,7 @@ describe("AI candidate selection & staleness (Phase 4 §7)", () => {
     await runAiSentimentPipeline({ platform: "flipkart", dryRun: false }, provider);
 
     await fixturePool.query(
-      `UPDATE "DataWarehouse".flipkart_reviews SET comment = 'Completely different review text now.', "updatedAt" = now() WHERE pid = 'PID001' AND review_id = 'fk_hash_0001'`,
+      `UPDATE "${config.appStore.schema}".flipkart_reviews SET comment = 'Completely different review text now.', "updatedAt" = now() WHERE pid = 'PID001' AND review_id = 'fk_hash_0001'`,
     );
     await runTrackB("flipkart");
 
@@ -71,7 +71,7 @@ describe("AI candidate selection & staleness (Phase 4 §7)", () => {
 
     // Restore for other tests sharing this fixture row.
     await fixturePool.query(
-      `UPDATE "DataWarehouse".flipkart_reviews SET comment = 'Loved it, works perfectly', "updatedAt" = now() WHERE pid = 'PID001' AND review_id = 'fk_hash_0001'`,
+      `UPDATE "${config.appStore.schema}".flipkart_reviews SET comment = 'Loved it, works perfectly', "updatedAt" = now() WHERE pid = 'PID001' AND review_id = 'fk_hash_0001'`,
     );
   });
 
@@ -84,7 +84,7 @@ describe("AI candidate selection & staleness (Phase 4 §7)", () => {
     const beforeCount = before.length;
 
     await fixturePool.query(
-      `UPDATE "DataWarehouse".flipkart_reviews SET rating = 1, "updatedAt" = now() WHERE pid = 'PID001' AND review_id = 'fk_hash_0001'`,
+      `UPDATE "${config.appStore.schema}".flipkart_reviews SET rating = 1, "updatedAt" = now() WHERE pid = 'PID001' AND review_id = 'fk_hash_0001'`,
     );
     await runTrackB("flipkart");
 
@@ -98,7 +98,7 @@ describe("AI candidate selection & staleness (Phase 4 §7)", () => {
 
     // Restore for other tests sharing this fixture row.
     await fixturePool.query(
-      `UPDATE "DataWarehouse".flipkart_reviews SET rating = 5, "updatedAt" = now() WHERE pid = 'PID001' AND review_id = 'fk_hash_0001'`,
+      `UPDATE "${config.appStore.schema}".flipkart_reviews SET rating = 5, "updatedAt" = now() WHERE pid = 'PID001' AND review_id = 'fk_hash_0001'`,
     );
   });
 });

@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-08-20T10:30:39.795Z",
+  "timestamp": "2026-08-20T10:34:55.192Z",
   "test": "Phase 3 Option A: In-Process Ingestion",
   "option": "A",
   "architecture": "Option A: In-process ingestion (same process, shared WebSocket singleton)",
@@ -14,8 +14,8 @@
     "wsEventCount": 12,
     "browserReceivedEvent": true,
     "browserEventCount": 12,
-    "apiRefreshTriggered": false,
-    "apiCallCount": 0,
+    "apiRefreshTriggered": true,
+    "apiCallCount": 14,
     "uiUpdatedWithoutReload": true,
     "scrollPreserved": true,
     "urlPreserved": true
@@ -23,71 +23,71 @@
   "wsMessages": [
     {
       "type": "CONNECTION",
-      "timestamp": "2026-08-20T10:30:18.698Z"
+      "timestamp": "2026-08-20T10:34:34.040Z"
     },
     {
       "type": "CONNECTION",
-      "timestamp": "2026-08-20T10:30:18.698Z"
+      "timestamp": "2026-08-20T10:34:34.041Z"
     },
     {
       "type": "PRODUCT_DATA_UPDATED",
       "platform": "myntra",
-      "timestamp": "2026-08-20T10:30:20.994Z"
+      "timestamp": "2026-08-20T10:34:36.344Z"
     },
     {
       "type": "PRODUCT_DATA_UPDATED",
       "platform": "myntra",
-      "timestamp": "2026-08-20T10:30:20.997Z"
+      "timestamp": "2026-08-20T10:34:36.346Z"
     },
     {
       "type": "PRODUCT_DATA_UPDATED",
       "platform": "myntra",
-      "timestamp": "2026-08-20T10:30:20.998Z"
+      "timestamp": "2026-08-20T10:34:36.348Z"
     },
     {
       "type": "PRODUCT_DATA_UPDATED",
       "platform": "myntra",
-      "timestamp": "2026-08-20T10:30:21.000Z"
+      "timestamp": "2026-08-20T10:34:36.350Z"
     },
     {
       "type": "PRODUCT_DATA_UPDATED",
       "platform": "myntra",
-      "timestamp": "2026-08-20T10:30:21.001Z"
+      "timestamp": "2026-08-20T10:34:36.350Z"
     },
     {
       "type": "PRODUCT_DATA_UPDATED",
       "platform": "myntra",
-      "timestamp": "2026-08-20T10:30:21.002Z"
+      "timestamp": "2026-08-20T10:34:36.352Z"
     },
     {
       "type": "PRODUCT_DATA_UPDATED",
       "platform": "myntra",
-      "timestamp": "2026-08-20T10:30:21.002Z"
+      "timestamp": "2026-08-20T10:34:36.352Z"
     },
     {
       "type": "PRODUCT_DATA_UPDATED",
       "platform": "myntra",
-      "timestamp": "2026-08-20T10:30:21.002Z"
+      "timestamp": "2026-08-20T10:34:36.353Z"
     },
     {
       "type": "PRODUCT_DATA_UPDATED",
       "platform": "myntra",
-      "timestamp": "2026-08-20T10:30:21.003Z"
+      "timestamp": "2026-08-20T10:34:36.353Z"
     },
     {
       "type": "PRODUCT_DATA_UPDATED",
       "platform": "myntra",
-      "timestamp": "2026-08-20T10:30:21.003Z"
+      "timestamp": "2026-08-20T10:34:36.353Z"
     },
     {
       "type": "PRODUCT_DATA_UPDATED",
       "platform": "myntra",
-      "timestamp": "2026-08-20T10:30:21.003Z"
+      "timestamp": "2026-08-20T10:34:36.353Z"
     },
     {
       "type": "PRODUCT_DATA_UPDATED",
       "platform": "myntra",
-      "timestamp": "2026-08-20T10:30:21.003Z"
+      "timestamp": "2026-08-20T10:34:36.353Z"
     }
   ],
   "eventSummary": {

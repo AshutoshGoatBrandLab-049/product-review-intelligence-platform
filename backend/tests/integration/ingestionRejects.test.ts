@@ -16,17 +16,17 @@ const fixturePool = new Pool({
 describe("ingestion_rejects — invalid rows are quarantined, never silently dropped", () => {
   beforeEach(async () => {
     await resetAppStore();
-    await fixturePool.query(`DELETE FROM "DataWarehouse".flipkart_reviews WHERE pid = 'PID_BAD'`);
+    await fixturePool.query(`DELETE FROM "${config.appStore.schema}".flipkart_reviews WHERE pid = 'PID_BAD'`);
   });
 
   afterAll(async () => {
-    await fixturePool.query(`DELETE FROM "DataWarehouse".flipkart_reviews WHERE pid = 'PID_BAD'`);
+    await fixturePool.query(`DELETE FROM "${config.appStore.schema}".flipkart_reviews WHERE pid = 'PID_BAD'`);
     await fixturePool.end();
   });
 
   it("rejects a row with an out-of-range rating and records only the allowlisted fields", async () => {
     await fixturePool.query(
-      `INSERT INTO "DataWarehouse".flipkart_reviews (pid, review_id, rating, review_date, country)
+      `INSERT INTO "${config.appStore.schema}".flipkart_reviews (pid, review_id, rating, review_date, country)
        VALUES ('PID_BAD', 'bad_rating_1', 9, CURRENT_DATE, 'India')`,
     );
 

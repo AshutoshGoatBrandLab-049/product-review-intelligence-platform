@@ -30,7 +30,7 @@ const WINDOW = "30d";
 
 async function insertFlipkart(reviewId: string, rating: number, daysAgo: number): Promise<void> {
   await fixturePool.query(
-    `INSERT INTO "DataWarehouse".flipkart_reviews
+    `INSERT INTO "${config.appStore.schema}".flipkart_reviews
        (brand_name, pid, review_id, rating, title, comment, review_date, product_url, author_name, verified_purchase, helpful_count, country, "createdAt", "updatedAt")
      VALUES ($5, $1, $2, $3, 't', 'c', CURRENT_DATE - $4::int, 'u', 'a', true, 0, 'India', now(), now())`,
     [FK_PID, reviewId, rating, daysAgo, BRAND],
@@ -39,7 +39,7 @@ async function insertFlipkart(reviewId: string, rating: number, daysAgo: number)
 
 async function insertMyntra(reviewId: string, rating: number, daysAgo: number): Promise<void> {
   await fixturePool.query(
-    `INSERT INTO "DataWarehouse".myntra_reviews
+    `INSERT INTO "${config.appStore.schema}".myntra_reviews
        (product_id, brand_name, review_id, rating, title, body, review_date, author_name, helpful_count, not_helpful_count, has_images, country, "createdAt", "updatedAt")
      VALUES ($1, $5, $2, $3, 't', 'b', CURRENT_DATE - $4::int, 'a', 0, 0, false, 'India', now(), now())`,
     [MY_PID, reviewId, rating, daysAgo, BRAND],
@@ -85,8 +85,8 @@ describe("API endpoint contracts + analytics-function wiring (Phase 6 Step 2)", 
   });
 
   afterAll(async () => {
-    await fixturePool.query(`DELETE FROM "DataWarehouse".flipkart_reviews WHERE pid = $1`, [FK_PID]);
-    await fixturePool.query(`DELETE FROM "DataWarehouse".myntra_reviews WHERE product_id = $1`, [MY_PID]);
+    await fixturePool.query(`DELETE FROM "${config.appStore.schema}".flipkart_reviews WHERE pid = $1`, [FK_PID]);
+    await fixturePool.query(`DELETE FROM "${config.appStore.schema}".myntra_reviews WHERE product_id = $1`, [MY_PID]);
     await fixturePool.end();
   });
 

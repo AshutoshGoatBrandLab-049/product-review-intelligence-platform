@@ -33,7 +33,7 @@ describe("completeness audit (Phase 2.1 §3)", () => {
     ] as const;
     for (const [reviewId, rating] of valid) {
       const { rows } = await fixturePool.query<{ id: number }>(
-        `INSERT INTO "DataWarehouse".flipkart_reviews
+        `INSERT INTO "${config.appStore.schema}".flipkart_reviews
            (brand_name, pid, review_id, rating, title, comment, review_date, product_url, author_name, verified_purchase, helpful_count, country, "createdAt", "updatedAt")
          VALUES ('B', $1, $2, $3, 't', 'c', CURRENT_DATE, 'u', 'a', true, 0, 'India', now(), now())
          RETURNING id`,
@@ -45,7 +45,7 @@ describe("completeness audit (Phase 2.1 §3)", () => {
     // One persistently-invalid row — this is the exact shape that caused the
     // negative "missing" count in Phase 2.
     const { rows: invalidRow } = await fixturePool.query<{ id: number }>(
-      `INSERT INTO "DataWarehouse".flipkart_reviews
+      `INSERT INTO "${config.appStore.schema}".flipkart_reviews
          (brand_name, pid, review_id, rating, title, comment, review_date, product_url, author_name, verified_purchase, helpful_count, country, "createdAt", "updatedAt")
        VALUES ('B', $1, 'R-INVALID-1', 0, 't', 'c', CURRENT_DATE, 'u', 'a', true, 0, 'India', now(), now())
        RETURNING id`,
@@ -55,7 +55,7 @@ describe("completeness audit (Phase 2.1 §3)", () => {
   });
 
   afterAll(async () => {
-    await fixturePool.query(`DELETE FROM "DataWarehouse".flipkart_reviews WHERE pid = $1`, [pid]);
+    await fixturePool.query(`DELETE FROM "${config.appStore.schema}".flipkart_reviews WHERE pid = $1`, [pid]);
     await fixturePool.end();
   });
 
@@ -68,7 +68,7 @@ describe("completeness audit (Phase 2.1 §3)", () => {
     // not just the ones this test added, since other fixture rows exist too
     // and Track B processes all of them within its window regardless.
     const { rows: totalRows } = await fixturePool.query<{ count: string }>(
-      `SELECT count(*)::text AS count FROM "DataWarehouse".flipkart_reviews`,
+      `SELECT count(*)::text AS count FROM "${config.appStore.schema}".flipkart_reviews`,
     );
     const sourceTotal = Number(totalRows[0]!.count);
 

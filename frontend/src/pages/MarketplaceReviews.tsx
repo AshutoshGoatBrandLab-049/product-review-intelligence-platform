@@ -11,23 +11,25 @@ export function MarketplaceReviews() {
   const sentimentTypes = [
     {
       type: "negative",
-      title: "Most Bad Reviews",
-      description: "Products customers complain most about",
+      title: "Products with Negative Reviews",
+      description: "Ranked by customer complaints and low ratings",
       icon: "📉",
       color: "from-red-500 to-orange-600",
       bgGradient: "from-red-500/10 to-orange-500/10",
       borderColor: "border-red-500/30",
       textColor: "text-red-300",
+      stats: "⚠️ Most Problematic Products",
     },
     {
       type: "positive",
-      title: "Most Good Reviews",
-      description: "Products customers love most",
+      title: "Products with Positive Reviews",
+      description: "Ranked by customer satisfaction and high ratings",
       icon: "📈",
       color: "from-green-500 to-emerald-600",
       bgGradient: "from-green-500/10 to-emerald-500/10",
       borderColor: "border-green-500/30",
       textColor: "text-green-300",
+      stats: "✨ Highly Rated Products",
     },
   ];
 
@@ -44,15 +46,18 @@ export function MarketplaceReviews() {
         </button>
 
         {/* Header */}
-        <div className="text-center mb-10">
-          <div className="flex items-center justify-center gap-2 mb-4">
-            <span className="text-4xl">{platformIcon}</span>
-            <h1 className="text-3xl md:text-4xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-gray-400">
+        <div className="text-center mb-16">
+          <div className="flex items-center justify-center gap-3 mb-6">
+            <span className="text-6xl">{platformIcon}</span>
+            <h1 className="text-4xl md:text-5xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-gray-300">
               {platformLabel}
             </h1>
           </div>
-          <p className="text-gray-400 text-base">
-            Choose sentiment type to explore ranked products
+          <p className="text-gray-300 text-lg md:text-xl font-semibold mb-2">
+            Product Review Intelligence
+          </p>
+          <p className="text-gray-400 text-base md:text-lg">
+            Select a category to view products ranked by customer sentiment
           </p>
         </div>
 
@@ -87,19 +92,17 @@ export function MarketplaceReviews() {
                   </div>
 
                   {/* Title & Description */}
-                  <div className="space-y-2 border-b border-slate-700/40 pb-4">
-                    <h2 className="text-xl font-bold text-white group-hover:text-transparent group-hover:bg-clip-text group-hover:bg-gradient-to-r group-hover:from-white group-hover:to-purple-200 transition-all">
+                  <div className="space-y-3 border-b border-slate-700/40 pb-4">
+                    <h2 className="text-2xl md:text-3xl font-bold text-white group-hover:text-transparent group-hover:bg-clip-text group-hover:bg-gradient-to-r group-hover:from-white group-hover:to-purple-200 transition-all leading-tight">
                       {sentiment.title}
                     </h2>
-                    <p className="text-gray-400 text-xs leading-relaxed">{sentiment.description}</p>
+                    <p className="text-gray-300 text-sm md:text-base leading-relaxed font-medium">{sentiment.description}</p>
                   </div>
 
                   {/* Stats box */}
-                  <div className={`p-3 rounded-lg bg-gradient-to-r ${sentiment.bgGradient} border ${sentiment.borderColor}`}>
-                    <p className={`${sentiment.textColor} font-semibold text-xs`}>
-                      {sentiment.type === "negative"
-                        ? "⚠️ View problematic products"
-                        : "✨ View highly rated products"}
+                  <div className={`p-4 rounded-lg bg-gradient-to-r ${sentiment.bgGradient} border ${sentiment.borderColor}`}>
+                    <p className={`${sentiment.textColor} font-bold text-sm md:text-base`}>
+                      {sentiment.stats}
                     </p>
                   </div>
 

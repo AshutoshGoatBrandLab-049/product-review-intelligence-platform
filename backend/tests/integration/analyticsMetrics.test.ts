@@ -19,7 +19,7 @@ const fixturePool = new Pool({
 
 async function insertFlipkart(pid: string, reviewId: string, rating: number, daysAgo: number, brand = "TestBrand"): Promise<void> {
   await fixturePool.query(
-    `INSERT INTO "DataWarehouse".flipkart_reviews
+    `INSERT INTO "${config.appStore.schema}".flipkart_reviews
        (brand_name, pid, review_id, rating, title, comment, review_date, product_url, author_name, verified_purchase, helpful_count, country, "createdAt", "updatedAt")
      VALUES ($1, $2, $3, $4, 't', 'c', CURRENT_DATE - $5::int, 'u', 'a', true, 0, 'India', now(), now())`,
     [brand, pid, reviewId, rating, daysAgo],
@@ -56,7 +56,7 @@ describe("product/brand/platform analytics (Phase 3 §5-9, §14, §17)", () => {
   });
 
   afterAll(async () => {
-    await fixturePool.query(`DELETE FROM "DataWarehouse".flipkart_reviews WHERE pid IN ($1, $2, $3)`, [trendPid, lowSamplePid, brandMixPid]);
+    await fixturePool.query(`DELETE FROM "${config.appStore.schema}".flipkart_reviews WHERE pid IN ($1, $2, $3)`, [trendPid, lowSamplePid, brandMixPid]);
     await fixturePool.end();
   });
 

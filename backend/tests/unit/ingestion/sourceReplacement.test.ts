@@ -1,499 +1,308 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { Transaction } from "sequelize";
+/**
+ * Unit coverage for source-replacement detection and cleanup.
+ *
+ * Replaces an earlier mock-based version that asserted the OLD ratio-gate
+ * algorithm — including cases that encoded the data-corruption bug as expected
+ * behaviour ("no overlap but count ratio ~1.0x → not a replacement" is exactly
+ * the same-size replacement that must now be caught, and "conservatively handles
+ * errors by returning false" is the error-swallowing that let a schema mismatch
+ * masquerade as 'no replacement'). Those assertions could not be carried over
+ * without re-asserting the defect.
+ *
+ * Runs against the real PostgreSQL test database rather than mocked query
+ * sequences, so it verifies behaviour instead of an implementation's SQL shape.
+ */
+
+import { describe, it, expect, beforeAll, beforeEach, afterAll } from "vitest";
+import { QueryTypes } from "sequelize";
 import { appSequelize } from "../../../src/database/appStore/client.js";
+import { config } from "../../../src/config/index.js";
 import {
+  getReplacementSignals,
   detectSourceReplacement,
   cleanupStaleSourceData,
+  RETENTION_REPLACEMENT_THRESHOLD,
 } from "../../../src/modules/ingestion/sourceReplacement.js";
+import { snapshotTables, restoreTables, truncateAll } from "../../helpers/dbSnapshot.js";
+import type { Platform } from "../../../src/types/unifiedReview.js";
 
-describe("Source Replacement Detection & Cleanup", () => {
-  afterEach(() => {
-    vi.clearAllMocks();
+const S = config.appStore.schema;
+
+/** Insert `count` source rows; `tag` controls composite identity. */
+async function seedSource(platform: Platform, count: number, tag: string, startId = 1) {
+  if (platform === "myntra") {
+    await appSequelize.query(
+      `INSERT INTO "${S}".myntra_reviews
+         (id, product_id, brand_name, review_id, rating, title, body, review_date)
+       SELECT $2 + g, 100 + (g % 5), 'B', $3 || '-r' || g, 1 + (g % 5),
+              't', 'b', DATE '2026-06-01'
+       FROM generate_series(0, $1 - 1) g`,
+      { bind: [count, startId, tag] },
+    );
+  } else {
+    await appSequelize.query(
+      `INSERT INTO "${S}".flipkart_reviews
+         (id, pid, brand_name, review_id, rating, title, comment, review_date)
+       SELECT $2 + g, 'P' || (100 + (g % 5)), 'B', $3 || '-r' || g, 1 + (g % 5),
+              't', 'c', DATE '2026-06-01'
+       FROM generate_series(0, $1 - 1) g`,
+      { bind: [count, startId, tag] },
+    );
+  }
+}
+
+/** Insert canonical rows mirroring a source tag (or a tag that never existed). */
+async function seedCanonical(platform: Platform, count: number, tag: string) {
+  const pidExpr = platform === "myntra" ? `(100 + (g % 5))::text` : `'P' || (100 + (g % 5))`;
+  await appSequelize.query(
+    `INSERT INTO "${S}".normalized_reviews
+       (canonical_review_id, platform, source_product_id, source_review_id, source_row_id,
+        identity_confidence, rating, review_date, date_confidence, content_hash,
+        source_updated_at, mapper_version)
+     SELECT md5($3 || '-' || g), $2, ${pidExpr}, $3 || '-r' || g, g,
+            'native', 3, DATE '2026-06-01', 'exact', md5('h' || $3 || g), now(), 1
+     FROM generate_series(0, $1 - 1) g`,
+    { bind: [count, platform, tag] },
+  );
+}
+
+const one = async (sql: string, bind: unknown[] = []) =>
+  ((await appSequelize.query(sql, { type: QueryTypes.SELECT, bind })) as any[])[0];
+
+describe("sourceReplacement — detection", () => {
+  beforeAll(snapshotTables);
+  afterAll(restoreTables);
+  beforeEach(truncateAll);
+
+  it("empty source is never a replacement (refuses to wipe canonical)", async () => {
+    await seedCanonical("myntra", 100, "OLD");
+    const s = await getReplacementSignals("myntra");
+    expect(s.sourceCount).toBe(0);
+    expect(s.isReplacement).toBe(false);
+    expect(s.reason).toBe("source_empty");
   });
 
-  describe("detectSourceReplacement() - Review ID Overlap Algorithm", () => {
-    it("returns false when source is empty (startup/error)", async () => {
-      vi.spyOn(appSequelize, "query").mockResolvedValueOnce({
-        count: 0,
-        maxId: 0,
-      });
-
-      const result = await detectSourceReplacement("myntra");
-      expect(result).toBe(false);
-    });
-
-    it("returns false when canonical is empty (startup condition)", async () => {
-      vi.spyOn(appSequelize, "query")
-        .mockResolvedValueOnce({ count: 100, maxId: 100 }) // source
-        .mockResolvedValueOnce({ count: 0, maxSourceRowId: 0 }); // canonical
-
-      const result = await detectSourceReplacement("myntra");
-      expect(result).toBe(false);
-    });
-
-    it("returns true when review_ids don't overlap AND source < 50% of canonical", async () => {
-      // Scenario: 50 new rows, 500 canonical rows, zero review_id overlap
-      // countRatio = 50/500 = 0.1 < 0.5 → REPLACEMENT
-      vi.spyOn(appSequelize, "query")
-        .mockResolvedValueOnce({ count: 50, maxId: 50 }) // source (plain: true returns object)
-        .mockResolvedValueOnce({ count: 500, maxSourceRowId: 500 }) // canonical (plain: true returns object)
-        .mockResolvedValueOnce({ overlapCount: 0 }); // review_id overlap (plain: true returns object) (no plain: true, returns array)
-
-      const result = await detectSourceReplacement("myntra");
-      expect(result).toBe(true);
-    });
-
-    it("returns false when review_ids don't overlap BUT source exactly 150% of canonical", async () => {
-      // Scenario: 1500 new rows, 1000 canonical rows, zero review_id overlap
-      // countRatio = 1500/1000 = 1.5 (NOT > 1.5) → NOT replacement
-      vi.spyOn(appSequelize, "query")
-        .mockResolvedValueOnce({ count: 1500, maxId: 1500 }) // source
-        .mockResolvedValueOnce({ count: 1000, maxSourceRowId: 1000 }) // canonical
-        .mockResolvedValueOnce({ overlapCount: 0 }); // review_id overlap (plain: true returns object)
-
-      const result = await detectSourceReplacement("myntra");
-      expect(result).toBe(false); // 1.5 is NOT > 1.5
-    });
-
-    it("returns false when review_ids overlap (normal incremental)", async () => {
-      // Scenario: some old review_ids still exist in source → incremental
-      // Even with high count ratio, overlap means it's not a replacement
-      vi.spyOn(appSequelize, "query")
-        .mockResolvedValueOnce({ count: 100, maxId: 1000 }) // source
-        .mockResolvedValueOnce({ count: 500, maxSourceRowId: 500 }) // canonical
-        .mockResolvedValueOnce({ overlapCount: 45 }); // review_ids overlap (plain: true returns object)
-
-      const result = await detectSourceReplacement("myntra");
-      expect(result).toBe(false); // Overlap exists → not replacement
-    });
-
-    it("returns false when no overlap but count ratio is similar (~1.0x)", async () => {
-      // Scenario: 1000 new rows, 1000 canonical rows, no overlap
-      // countRatio = 1.0 (not < 0.5 and not > 1.5) → NOT replacement
-      // Conservative: might be coincidental, don't delete
-      vi.spyOn(appSequelize, "query")
-        .mockResolvedValueOnce({ count: 1000, maxId: 1000 }) // source
-        .mockResolvedValueOnce({ count: 1000, maxSourceRowId: 1000 }) // canonical
-        .mockResolvedValueOnce({ overlapCount: 0 }); // review_id overlap (plain: true returns object)
-
-      const result = await detectSourceReplacement("myntra");
-      expect(result).toBe(false);
-    });
-
-    it("handles flipkart platform (marketplace-agnostic)", async () => {
-      vi.spyOn(appSequelize, "query")
-        .mockResolvedValueOnce({ count: 50, maxId: 50 }) // source
-        .mockResolvedValueOnce({ count: 500, maxSourceRowId: 500 }) // canonical
-        .mockResolvedValueOnce({ overlapCount: 0 }); // review_id overlap (plain: true returns object)
-
-      const result = await detectSourceReplacement("flipkart");
-      expect(result).toBe(true);
-    });
-
-    it("conservatively handles errors by returning false", async () => {
-      vi.spyOn(appSequelize, "query").mockRejectedValueOnce(
-        new Error("Database error"),
-      );
-
-      const result = await detectSourceReplacement("myntra");
-      expect(result).toBe(false); // Safe default
-    });
-
-    describe("Edge Cases", () => {
-      it("handles very small source (1 row) with no overlap", async () => {
-        vi.spyOn(appSequelize, "query")
-          .mockResolvedValueOnce({ count: 1, maxId: 1 }) // source
-          .mockResolvedValueOnce({ count: 1000, maxSourceRowId: 1000 }) // canonical
-          .mockResolvedValueOnce({ overlapCount: 0 }); // review_id overlap (plain: true returns object)
-
-        const result = await detectSourceReplacement("myntra");
-        expect(result).toBe(true);
-      });
-
-      it("handles exactly 50% ratio with no overlap (below threshold)", async () => {
-        // source: 500, canonical: 1000, ratio = 0.5 (NOT < 0.5) → NOT replacement
-        vi.spyOn(appSequelize, "query")
-          .mockResolvedValueOnce({ count: 500, maxId: 500 }) // source
-          .mockResolvedValueOnce({ count: 1000, maxSourceRowId: 1000 }) // canonical
-          .mockResolvedValueOnce({ overlapCount: 0 }); // review_id overlap (plain: true returns object)
-
-        const result = await detectSourceReplacement("myntra");
-        expect(result).toBe(false); // 0.5 is NOT < 0.5
-      });
-
-      it("handles 49.9% ratio with no overlap (above threshold)", async () => {
-        // source: 499, canonical: 1000, ratio = 0.499 < 0.5 → REPLACEMENT
-        vi.spyOn(appSequelize, "query")
-          .mockResolvedValueOnce({ count: 499, maxId: 499 }) // source
-          .mockResolvedValueOnce({ count: 1000, maxSourceRowId: 1000 }) // canonical
-          .mockResolvedValueOnce({ overlapCount: 0 }); // review_id overlap (plain: true returns object)
-
-        const result = await detectSourceReplacement("myntra");
-        expect(result).toBe(true);
-      });
-
-      it("handles exactly 150% ratio with no overlap (at threshold)", async () => {
-        // source: 1500, canonical: 1000, ratio = 1.5 (NOT > 1.5) → NOT replacement
-        vi.spyOn(appSequelize, "query")
-          .mockResolvedValueOnce({ count: 1500, maxId: 1500 }) // source
-          .mockResolvedValueOnce({ count: 1000, maxSourceRowId: 1000 }) // canonical
-          .mockResolvedValueOnce({ overlapCount: 0 }); // review_id overlap (plain: true returns object)
-
-        const result = await detectSourceReplacement("myntra");
-        expect(result).toBe(false); // 1.5 is NOT > 1.5
-      });
-
-      it("handles 150.1% ratio with no overlap (above threshold)", async () => {
-        // source: 1501, canonical: 1000, ratio = 1.501 > 1.5 → REPLACEMENT
-        vi.spyOn(appSequelize, "query")
-          .mockResolvedValueOnce({ count: 1501, maxId: 1501 }) // source
-          .mockResolvedValueOnce({ count: 1000, maxSourceRowId: 1000 }) // canonical
-          .mockResolvedValueOnce({ overlapCount: 0 }); // review_id overlap (plain: true returns object)
-
-        const result = await detectSourceReplacement("myntra");
-        expect(result).toBe(true);
-      });
-
-      it("handles high ratio with overlap (not replacement)", async () => {
-        // source: 2000, canonical: 1000, ratio = 2.0 > 1.5
-        // BUT overlap exists → normal incremental
-        vi.spyOn(appSequelize, "query")
-          .mockResolvedValueOnce({ count: 2000, maxId: 2000 }) // source
-          .mockResolvedValueOnce({ count: 1000, maxSourceRowId: 1000 }) // canonical
-          .mockResolvedValueOnce({ overlapCount: 500 }); // review_ids overlap (plain: true returns object)
-
-        const result = await detectSourceReplacement("myntra");
-        expect(result).toBe(false); // Overlap exists → not replacement
-      });
-
-      it("is idempotent - same result on repeated calls", async () => {
-        const mockQuery = vi.spyOn(appSequelize, "query");
-        mockQuery
-          .mockResolvedValueOnce({ count: 50, maxId: 50 }) // call 1: source
-          .mockResolvedValueOnce({ count: 500, maxSourceRowId: 500 }) // call 2: canonical
-          .mockResolvedValueOnce({ overlapCount: 0 }) // call 3: overlap (plain: true)
-          .mockResolvedValueOnce({ count: 50, maxId: 50 }) // call 4: source
-          .mockResolvedValueOnce({ count: 500, maxSourceRowId: 500 }) // call 5: canonical
-          .mockResolvedValueOnce({ overlapCount: 0 }); // call 6: overlap (plain: true)
-
-        const result1 = await detectSourceReplacement("myntra");
-        const result2 = await detectSourceReplacement("myntra");
-
-        expect(result1).toBe(true);
-        expect(result2).toBe(true);
-      });
-    });
+  it("empty canonical is never a replacement (first-time ingestion)", async () => {
+    await seedSource("myntra", 100, "NEW");
+    const s = await getReplacementSignals("myntra");
+    expect(s.canonicalCount).toBe(0);
+    expect(s.isReplacement).toBe(false);
+    expect(s.reason).toBe("canonical_empty_first_ingestion");
   });
 
-  describe("cleanupStaleSourceData()", () => {
-    let mockTransaction: Partial<Transaction>;
+  it("retention is computed from COMPOSITE identity, not bare review_id", async () => {
+    // Same review_id values, DIFFERENT products → composite identity does not match.
+    await seedCanonical("myntra", 50, "SAME");
+    await appSequelize.query(
+      `UPDATE "${S}".normalized_reviews SET source_product_id = 'other-' || source_product_id`,
+    );
+    await seedSource("myntra", 50, "SAME");
 
-    beforeEach(() => {
-      mockTransaction = {};
-    });
-
-    it("deletes normalized_reviews for deleted reviews", async () => {
-      const mockQueryFn = vi.spyOn(appSequelize, "query");
-
-      // Mock return values for each query in cleanupStaleSourceData
-      mockQueryFn
-        .mockResolvedValueOnce([
-          {
-            canonicalReviewId: "rev1",
-            sourceProductId: "prod1",
-          },
-          {
-            canonicalReviewId: "rev2",
-            sourceProductId: "prod1",
-          },
-        ]) // 1. Query: stale reviews
-        .mockResolvedValueOnce(undefined) // 2. Delete: identity_anomalies batch
-        .mockResolvedValueOnce(undefined) // 3. Delete: review_sentiment batch
-        .mockResolvedValueOnce(undefined) // 4. Delete: review_theme batch
-        .mockResolvedValueOnce(undefined) // 5. Delete: normalized_reviews batch
-        .mockResolvedValueOnce([]) // 6. Query: stale products (empty)
-        .mockResolvedValueOnce({ count: 0 }) // 7. Query: stale metrics count
-        .mockResolvedValueOnce([]); // 8. Query: affected products
-
-      const result = await cleanupStaleSourceData(
-        "myntra",
-        mockTransaction as Transaction,
-      );
-
-      expect(result.staleReviewsDeleted).toBe(2);
-      expect(result.staleProductsDeleted).toBe(0);
-      expect(result.staleMetricsDeleted).toBe(0);
-    });
-
-    it("deletes product_dimension for products with no reviews", async () => {
-      const mockQueryFn = vi.spyOn(appSequelize, "query");
-
-      mockQueryFn
-        .mockResolvedValueOnce([]) // stale reviews
-        .mockResolvedValueOnce([
-          { sourceProductId: "prod1" },
-          { sourceProductId: "prod2" },
-        ]) // stale products
-        .mockResolvedValueOnce(undefined) // delete products
-        .mockResolvedValueOnce([{ count: 0 }]) // stale metrics count
-        .mockResolvedValueOnce([]); // affected products
-
-      const result = await cleanupStaleSourceData(
-        "myntra",
-        mockTransaction as Transaction,
-      );
-
-      expect(result.staleProductsDeleted).toBe(2);
-    });
-
-    it("deletes product_daily_metrics for deleted review dates", async () => {
-      const mockQueryFn = vi.spyOn(appSequelize, "query");
-
-      mockQueryFn
-        .mockResolvedValueOnce([]) // stale reviews
-        .mockResolvedValueOnce([]) // stale products
-        .mockResolvedValueOnce([{ count: 150 }]) // stale metrics count
-        .mockResolvedValueOnce(undefined) // delete metrics
-        .mockResolvedValueOnce([]); // affected products
-
-      const result = await cleanupStaleSourceData(
-        "myntra",
-        mockTransaction as Transaction,
-      );
-
-      expect(result.staleMetricsDeleted).toBe(150);
-    });
-
-    it("identifies affected products correctly", async () => {
-      const mockQueryFn = vi.spyOn(appSequelize, "query");
-
-      mockQueryFn
-        .mockResolvedValueOnce([]) // stale reviews
-        .mockResolvedValueOnce([]) // stale products
-        .mockResolvedValueOnce([{ count: 0 }]) // stale metrics count
-        .mockResolvedValueOnce([
-          { platform: "myntra", sourceProductId: "prod1" },
-          { platform: "myntra", sourceProductId: "prod2" },
-          { platform: "myntra", sourceProductId: "prod3" },
-        ]); // affected products
-
-      const result = await cleanupStaleSourceData(
-        "myntra",
-        mockTransaction as Transaction,
-      );
-
-      expect(result.affectedProducts).toHaveLength(3);
-      expect(result.affectedProducts[0].sourceProductId).toBe("prod1");
-      expect(result.affectedProducts[1].sourceProductId).toBe("prod2");
-      expect(result.affectedProducts[2].sourceProductId).toBe("prod3");
-    });
-
-    it("returns correct result structure", async () => {
-      const mockQueryFn = vi.spyOn(appSequelize, "query");
-
-      mockQueryFn
-        .mockResolvedValueOnce([]) // stale reviews
-        .mockResolvedValueOnce([]) // stale products
-        .mockResolvedValueOnce([{ count: 0 }]) // stale metrics count
-        .mockResolvedValueOnce([]); // affected products
-
-      const result = await cleanupStaleSourceData(
-        "myntra",
-        mockTransaction as Transaction,
-      );
-
-      expect(result).toHaveProperty("staleReviewsDeleted");
-      expect(result).toHaveProperty("staleProductsDeleted");
-      expect(result).toHaveProperty("staleMetricsDeleted");
-      expect(result).toHaveProperty("affectedProducts");
-      expect(result.affectedProducts).toBeInstanceOf(Array);
-    });
-
-    it("handles large batch deletions (>1000 reviews)", async () => {
-      const mockQueryFn = vi.spyOn(appSequelize, "query");
-      const largeReviewList = Array.from({ length: 2500 }, (_, i) => ({
-        canonicalReviewId: `rev${i}`,
-        sourceProductId: "prod1",
-      }));
-
-      mockQueryFn
-        // Query: stale reviews
-        .mockResolvedValueOnce(largeReviewList)
-        // Batch 1: delete identity_anomalies, review_sentiment, review_theme, normalized_reviews
-        .mockResolvedValueOnce(undefined)
-        .mockResolvedValueOnce(undefined)
-        .mockResolvedValueOnce(undefined)
-        .mockResolvedValueOnce(undefined)
-        // Batch 2: delete identity_anomalies, review_sentiment, review_theme, normalized_reviews
-        .mockResolvedValueOnce(undefined)
-        .mockResolvedValueOnce(undefined)
-        .mockResolvedValueOnce(undefined)
-        .mockResolvedValueOnce(undefined)
-        // Batch 3: delete identity_anomalies, review_sentiment, review_theme, normalized_reviews
-        .mockResolvedValueOnce(undefined)
-        .mockResolvedValueOnce(undefined)
-        .mockResolvedValueOnce(undefined)
-        .mockResolvedValueOnce(undefined)
-        // Query: stale products (empty)
-        .mockResolvedValueOnce([])
-        // Query: stale metrics count
-        .mockResolvedValueOnce({ count: 0 })
-        // Query: affected products
-        .mockResolvedValueOnce([]);
-
-      const result = await cleanupStaleSourceData(
-        "myntra",
-        mockTransaction as Transaction,
-      );
-
-      expect(result.staleReviewsDeleted).toBe(2500);
-      // Verify batching: 2500 / 1000 = 3 batches
-      // Queries: 1 stale + (3 batches × 4 deletes) + 1 products + 1 metrics + 1 affected = 16 total
-      expect(mockQueryFn).toHaveBeenCalledTimes(16);
-    });
-
-    it("handles flipkart platform", async () => {
-      const mockQueryFn = vi.spyOn(appSequelize, "query");
-
-      mockQueryFn
-        .mockResolvedValueOnce([]) // stale reviews
-        .mockResolvedValueOnce([]) // stale products
-        .mockResolvedValueOnce([{ count: 0 }]) // stale metrics count
-        .mockResolvedValueOnce([]); // affected products
-
-      const result = await cleanupStaleSourceData(
-        "flipkart",
-        mockTransaction as Transaction,
-      );
-
-      expect(result).toBeDefined();
-      expect(result.staleReviewsDeleted).toBe(0);
-      expect(result.affectedProducts).toBeInstanceOf(Array);
-    });
-
-    it("parametrizes platform correctly in all queries", async () => {
-      const mockQueryFn = vi.spyOn(appSequelize, "query");
-
-      mockQueryFn
-        .mockResolvedValueOnce([]) // stale reviews
-        .mockResolvedValueOnce([]) // stale products
-        .mockResolvedValueOnce([{ count: 0 }]) // stale metrics count
-        .mockResolvedValueOnce([]); // affected products
-
-      await cleanupStaleSourceData("myntra", mockTransaction as Transaction);
-
-      // Verify all query calls include platform parameter
-      const queryCalls = mockQueryFn.mock.calls;
-      queryCalls.forEach((call) => {
-        const options = call[1] as any;
-        if (options?.bind) {
-          // First bind parameter should be platform
-          expect(options.bind[0]).toBe("myntra");
-        }
-      });
-    });
-
-    it("throws error on database failure to trigger rollback", async () => {
-      const mockQueryFn = vi.spyOn(appSequelize, "query");
-      mockQueryFn.mockRejectedValueOnce(new Error("Database error"));
-
-      await expect(
-        cleanupStaleSourceData("myntra", mockTransaction as Transaction),
-      ).rejects.toThrow("Database error");
-    });
+    const s = await getReplacementSignals("myntra");
+    expect(s.retainedCount, "bare review_id would wrongly match all 50").toBe(0);
+    expect(s.retention).toBe(0);
+    expect(s.isReplacement).toBe(true);
   });
 
-  describe("Integration: Detection + Cleanup", () => {
-    it("full replacement workflow", async () => {
-      const mockQueryFn = vi.spyOn(appSequelize, "query");
-
-      // Detection queries (3 queries)
-      mockQueryFn
-        .mockResolvedValueOnce({ count: 50, maxId: 50 }) // source count
-        .mockResolvedValueOnce({ count: 500, maxSourceRowId: 500 }) // canonical count
-        .mockResolvedValueOnce({ overlapCount: 0 }) // review_id overlap (plain: true)
-        // Cleanup queries
-        .mockResolvedValueOnce([
-          { canonicalReviewId: "rev1", sourceProductId: "prod1" },
-        ]) // stale reviews query
-        .mockResolvedValueOnce(undefined) // delete identity_anomalies
-        .mockResolvedValueOnce(undefined) // delete review_sentiment
-        .mockResolvedValueOnce(undefined) // delete review_theme
-        .mockResolvedValueOnce(undefined) // delete normalized_reviews
-        .mockResolvedValueOnce([{ sourceProductId: "prod1" }]) // stale products query
-        .mockResolvedValueOnce(undefined) // delete stale products
-        .mockResolvedValueOnce([{ count: 5 }]) // stale metrics count query
-        .mockResolvedValueOnce(undefined) // delete stale metrics
-        .mockResolvedValueOnce([
-          { platform: "myntra", sourceProductId: "prod2" },
-        ]); // affected products query
-
-      const isReplacement = await detectSourceReplacement("myntra");
-      expect(isReplacement).toBe(true);
-
-      const mockTransaction = {} as Transaction;
-      const cleanup = await cleanupStaleSourceData("myntra", mockTransaction);
-
-      expect(cleanup.staleReviewsDeleted).toBe(1);
-      expect(cleanup.staleProductsDeleted).toBe(1);
-      expect(cleanup.staleMetricsDeleted).toBe(5);
-      expect(cleanup.affectedProducts).toHaveLength(1);
-    });
-
-    it("handles no-replacement scenario", async () => {
-      const mockQueryFn = vi.spyOn(appSequelize, "query");
-
-      // Detection: returns false (no replacement)
-      // Source and canonical counts are similar with overlap
-      mockQueryFn
-        .mockResolvedValueOnce({ count: 500, maxId: 500 }) // source
-        .mockResolvedValueOnce({ count: 600, maxSourceRowId: 600 }) // canonical
-        .mockResolvedValueOnce({ overlapCount: 400 }); // significant overlap (plain: true)
-
-      const isReplacement = await detectSourceReplacement("myntra");
-      expect(isReplacement).toBe(false);
-
-      // Cleanup should not be called
-      expect(mockQueryFn).toHaveBeenCalledTimes(3);
-    });
+  it("full identity overlap → retention 1.0, not a replacement", async () => {
+    await seedCanonical("myntra", 100, "A");
+    await seedSource("myntra", 100, "A");
+    const s = await getReplacementSignals("myntra", undefined, { exact: true });
+    expect(s.retainedCount).toBe(100);
+    expect(s.retention).toBe(1);
+    expect(s.retentionExact).toBe(true);
+    expect(s.isReplacement).toBe(false);
+    expect(s.reason).toBe("retention_normal_incremental");
   });
 
-  describe("Platform Compatibility", () => {
-    const platforms: ["flipkart", "myntra"] = ["flipkart", "myntra"];
+  it("bounded scan stops early on the common path but reports it honestly", async () => {
+    await seedCanonical("myntra", 100, "A");
+    await seedSource("myntra", 100, "A");
 
-    platforms.forEach((platform) => {
-      describe(`${platform} platform`, () => {
-        it("detection works", async () => {
-          const mockQueryFn = vi.spyOn(appSequelize, "query");
-          mockQueryFn
-            .mockResolvedValueOnce({ count: 100, maxId: 100 }) // source
-            .mockResolvedValueOnce({ count: 1000, maxSourceRowId: 1000 }) // canonical
-            .mockResolvedValueOnce([{ overlapCount: 50 }]); // review_id overlap
+    const fast = await getReplacementSignals("myntra");
+    // cap = floor(0.05 * 100) + 1 = 6 — counting stops there instead of at 100.
+    expect(fast.retainedCount).toBe(6);
+    expect(fast.retentionExact, "a lower bound must never be reported as exact").toBe(false);
+    expect(fast.isReplacement).toBe(false);
+  });
 
-          const result = await detectSourceReplacement(platform);
-          expect(typeof result).toBe("boolean");
-        });
+  it("EQUIVALENCE: bounded and exact scans always agree on the verdict", async () => {
+    // Across the full spectrum of retention, the optimisation must not change
+    // a single verdict — only how much work is done reaching it.
+    for (const [canonicalRows, sourceRows] of [
+      [100, 0],    // retention 0.00 → replacement
+      [100, 2],    // retention 0.02 → replacement
+      [100, 5],    // retention 0.05 → boundary, NOT a replacement
+      [100, 6],    // retention 0.06 → not a replacement
+      [100, 50],   // retention 0.50 → not a replacement
+      [100, 100],  // retention 1.00 → not a replacement
+    ] as const) {
+      await truncateAll();
+      await seedCanonical("myntra", canonicalRows, "A");
+      if (sourceRows > 0) await seedSource("myntra", sourceRows, "A");
+      // Keep source non-empty so the empty-source guard doesn't short-circuit.
+      if (sourceRows === 0) await seedSource("myntra", 10, "OTHER");
 
-        it("cleanup works", async () => {
-          const mockQueryFn = vi.spyOn(appSequelize, "query");
-          mockQueryFn
-            .mockResolvedValueOnce([]) // stale reviews
-            .mockResolvedValueOnce([]) // stale products
-            .mockResolvedValueOnce([{ count: 0 }]) // stale metrics count
-            .mockResolvedValueOnce([]); // affected products
+      const fast = await getReplacementSignals("myntra");
+      const exact = await getReplacementSignals("myntra", undefined, { exact: true });
 
-          const mockTransaction = {} as Transaction;
-          const result = await cleanupStaleSourceData(
-            platform,
-            mockTransaction,
-          );
+      expect(
+        fast.isReplacement,
+        `verdict mismatch at canonical=${canonicalRows} source=${sourceRows} ` +
+          `(fast retained=${fast.retainedCount}, exact retained=${exact.retainedCount})`,
+      ).toBe(exact.isReplacement);
+    }
+  });
 
-          expect(result).toHaveProperty("staleReviewsDeleted");
-          expect(result).toHaveProperty("staleProductsDeleted");
-          expect(result).toHaveProperty("staleMetricsDeleted");
-          expect(result).toHaveProperty("affectedProducts");
-        });
-      });
+  it("zero overlap → replacement regardless of count ratio", async () => {
+    // ratio 1.0 — the case the old ratio gate declared "not a replacement".
+    await seedCanonical("myntra", 100, "OLD");
+    await seedSource("myntra", 100, "NEW");
+    const s = await getReplacementSignals("myntra");
+    expect(s.sourceCount / s.canonicalCount).toBe(1);
+    expect(s.retention).toBe(0);
+    expect(s.isReplacement).toBe(true);
+    expect(s.reason).toBe("retention_below_threshold");
+  });
+
+  it("threshold is exclusive: retention exactly at the threshold is NOT a replacement", async () => {
+    // 100 canonical, 5 retained → retention 0.05, equal to the threshold.
+    await seedCanonical("myntra", 100, "A");
+    await seedSource("myntra", 5, "A"); // first 5 identities match
+    const s = await getReplacementSignals("myntra");
+    expect(s.retention).toBeCloseTo(RETENTION_REPLACEMENT_THRESHOLD, 10);
+    expect(s.isReplacement, "boundary is `< threshold`, so equality is not a replacement").toBe(false);
+  });
+
+  it("detection is idempotent — repeated calls agree", async () => {
+    await seedCanonical("myntra", 100, "OLD");
+    await seedSource("myntra", 100, "NEW");
+    const a = await detectSourceReplacement("myntra");
+    const b = await detectSourceReplacement("myntra");
+    const c = await detectSourceReplacement("myntra");
+    expect([a, b, c]).toEqual([true, true, true]);
+  });
+
+  it("PROPAGATES errors instead of silently reporting 'no replacement'", async () => {
+    // A detector that returns false on error is indistinguishable from one that
+    // looked and found nothing — that is how the schema mismatch became silent
+    // data corruption. Force a failure and require it to surface.
+    await appSequelize.query(`ALTER TABLE "${S}".myntra_reviews RENAME TO myntra_reviews_hidden`);
+    try {
+      await expect(getReplacementSignals("myntra")).rejects.toThrow();
+    } finally {
+      await appSequelize.query(`ALTER TABLE "${S}".myntra_reviews_hidden RENAME TO myntra_reviews`);
+    }
+  });
+
+  for (const platform of ["myntra", "flipkart"] as const) {
+    it(`is marketplace-agnostic — ${platform} detection uses its own identity columns`, async () => {
+      await seedCanonical(platform, 80, "OLD");
+      await seedSource(platform, 80, "NEW");
+      const s = await getReplacementSignals(platform);
+      expect(s.sourceCount).toBe(80);
+      expect(s.canonicalCount).toBe(80);
+      expect(s.retention).toBe(0);
+      expect(s.isReplacement).toBe(true);
     });
+  }
+});
+
+describe("sourceReplacement — cleanup", () => {
+  beforeAll(snapshotTables);
+  afterAll(restoreTables);
+  beforeEach(truncateAll);
+
+  it("deletes canonical reviews absent from source, keeps those present", async () => {
+    await seedCanonical("myntra", 100, "GONE");
+    await seedSource("myntra", 40, "KEPT");
+    await seedCanonical("myntra", 40, "KEPT");
+
+    const before = await one(
+      `SELECT COUNT(*)::int n FROM "${S}".normalized_reviews WHERE platform='myntra'`,
+    );
+    expect(before.n).toBe(140);
+
+    const result = await appSequelize.transaction((t) => cleanupStaleSourceData("myntra", t));
+
+    expect(result.staleReviewsDeleted).toBe(100);
+    const after = await one(
+      `SELECT COUNT(*)::int n FROM "${S}".normalized_reviews WHERE platform='myntra'`,
+    );
+    expect(after.n).toBe(40);
+  });
+
+  it("handles batch deletion above the 1000-row batch size", async () => {
+    await seedCanonical("myntra", 2500, "GONE");
+    const result = await appSequelize.transaction((t) => cleanupStaleSourceData("myntra", t));
+    expect(result.staleReviewsDeleted).toBe(2500);
+    const after = await one(
+      `SELECT COUNT(*)::int n FROM "${S}".normalized_reviews WHERE platform='myntra'`,
+    );
+    expect(after.n).toBe(0);
+  });
+
+  it("deletes product_dimension rows left with no reviews", async () => {
+    await seedCanonical("myntra", 50, "GONE");
+    await appSequelize.query(
+      `INSERT INTO "${S}".product_dimension
+         (platform, source_product_id, first_review_date, last_review_date, total_review_count)
+       VALUES ('myntra','100',DATE '2026-06-01',DATE '2026-06-01',1),
+              ('myntra','999',DATE '2026-06-01',DATE '2026-06-01',1)`,
+    );
+
+    const result = await appSequelize.transaction((t) => cleanupStaleSourceData("myntra", t));
+    expect(result.staleProductsDeleted).toBeGreaterThan(0);
+    const left = await one(
+      `SELECT COUNT(*)::int n FROM "${S}".product_dimension WHERE platform='myntra'`,
+    );
+    expect(left.n).toBe(0);
+  });
+
+  it("deletes product_daily_metrics with no matching (product, date)", async () => {
+    await appSequelize.query(
+      `INSERT INTO "${S}".product_daily_metrics
+         (platform, source_product_id, review_date, review_count, rating_sum)
+       VALUES ('myntra','100',DATE '2026-06-01',1,3)`,
+    );
+    const result = await appSequelize.transaction((t) => cleanupStaleSourceData("myntra", t));
+    expect(result.staleMetricsDeleted).toBe(1);
+  });
+
+  it("returns the documented result shape", async () => {
+    await seedCanonical("myntra", 10, "GONE");
+    const result = await appSequelize.transaction((t) => cleanupStaleSourceData("myntra", t));
+    expect(result).toHaveProperty("staleReviewsDeleted");
+    expect(result).toHaveProperty("staleProductsDeleted");
+    expect(result).toHaveProperty("staleMetricsDeleted");
+    expect(Array.isArray(result.affectedProducts)).toBe(true);
+  });
+
+  it("leaves the OTHER marketplace untouched", async () => {
+    await seedCanonical("myntra", 60, "GONE");
+    await seedSource("flipkart", 30, "FK");
+    await seedCanonical("flipkart", 30, "FK");
+
+    await appSequelize.transaction((t) => cleanupStaleSourceData("myntra", t));
+
+    const fk = await one(
+      `SELECT COUNT(*)::int n FROM "${S}".normalized_reviews WHERE platform='flipkart'`,
+    );
+    expect(fk.n, "flipkart rows must survive a myntra cleanup").toBe(30);
+  });
+
+  it("flipkart cleanup uses pid (regression: it previously queried a non-existent product_id)", async () => {
+    await seedCanonical("flipkart", 40, "GONE");
+    await seedSource("flipkart", 15, "KEPT");
+    await seedCanonical("flipkart", 15, "KEPT");
+
+    // Previously threw `column fr.product_id does not exist`, rolling everything back.
+    const result = await appSequelize.transaction((t) => cleanupStaleSourceData("flipkart", t));
+
+    expect(result.staleReviewsDeleted).toBe(40);
+    const left = await one(
+      `SELECT COUNT(*)::int n FROM "${S}".normalized_reviews WHERE platform='flipkart'`,
+    );
+    expect(left.n).toBe(15);
   });
 });

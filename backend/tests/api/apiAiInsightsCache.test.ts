@@ -32,7 +32,7 @@ const WINDOW = resolveNamedWindow("30d");
 
 async function insertFlipkart(reviewId: string, rating: number, daysAgo: number): Promise<void> {
   await fixturePool.query(
-    `INSERT INTO "DataWarehouse".flipkart_reviews
+    `INSERT INTO "${config.appStore.schema}".flipkart_reviews
        (brand_name, pid, review_id, rating, title, comment, review_date, product_url, author_name, verified_purchase, helpful_count, country, "createdAt", "updatedAt")
      VALUES ('AiCacheBrand', $1, $2, $3, 't', 'c', CURRENT_DATE - $4::int, 'u', 'a', true, 0, 'India', now(), now())`,
     [PID, reviewId, rating, daysAgo],
@@ -68,7 +68,7 @@ describe("AI insights cache prevents duplicate provider calls (Phase 6 Step 2)",
   });
 
   afterAll(async () => {
-    await fixturePool.query(`DELETE FROM "DataWarehouse".flipkart_reviews WHERE pid = $1`, [PID]);
+    await fixturePool.query(`DELETE FROM "${config.appStore.schema}".flipkart_reviews WHERE pid = $1`, [PID]);
     await fixturePool.end();
   });
 

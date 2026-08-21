@@ -55,6 +55,10 @@ export interface ReviewsOverviewParams {
   platform: "flipkart" | "myntra";
   type: "negative" | "positive";
   page?: number;
+  reviewWindow?: "latest10" | "latest20" | "latest50" | "latest100" | "custom";
+  customFromDate?: string;
+  customToDate?: string;
+  sortBy?: "ratingAsc" | "ratingDesc" | "default";
 }
 
 export function getReviewsOverview(params: ReviewsOverviewParams, signal?: AbortSignal) {
@@ -63,6 +67,10 @@ export function getReviewsOverview(params: ReviewsOverviewParams, signal?: Abort
     type: params.type,
   };
   if (params.page !== undefined) query.page = params.page;
+  if (params.reviewWindow) query.reviewWindow = params.reviewWindow;
+  if (params.customFromDate) query.customFromDate = params.customFromDate;
+  if (params.customToDate) query.customToDate = params.customToDate;
+  if (params.sortBy) query.sortBy = params.sortBy;
 
   return apiGet<ReviewsOverviewResponse>("/v1/reviews/overview", { query, signal });
 }

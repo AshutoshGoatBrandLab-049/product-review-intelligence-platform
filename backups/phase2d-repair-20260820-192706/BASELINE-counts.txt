@@ -1,0 +1,15 @@
+flipkart_source_maxid=17837
+myntra_source_minid=1
+myntra_source_maxid=27310
+product_dimension_total=457
+product_dimension_myntra=42
+product_dimension_flipkart=415
+flipkart_source_count=9086
+product_daily_metrics_myntra=401
+flipkart_canonical_count=9086
+myntra_source_count=21647
+myntra_canonical_count=16876
+product_daily_metrics_total=4271
+product_daily_metrics_flipkart=3870
+flipkart_canonical_max_srcrowid=17837
+myntra_canonical_max_srcrowid=51529

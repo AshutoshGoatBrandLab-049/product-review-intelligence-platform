@@ -34,7 +34,7 @@ const MYNTRA_PID = 990022; // same string value as PID X/Y is impossible (numeri
 
 async function insertFlipkart(pid: string, reviewId: string, rating: number, daysAgo: number): Promise<void> {
   await fixturePool.query(
-    `INSERT INTO "DataWarehouse".flipkart_reviews
+    `INSERT INTO "${config.appStore.schema}".flipkart_reviews
        (brand_name, pid, review_id, rating, title, comment, review_date, product_url, author_name, verified_purchase, helpful_count, country, "createdAt", "updatedAt")
      VALUES ('InvalidateBrand', $1, $2, $3, 't', 'c', CURRENT_DATE - $4::int, 'u', 'a', true, 0, 'India', now(), now())`,
     [pid, reviewId, rating, daysAgo],
@@ -43,7 +43,7 @@ async function insertFlipkart(pid: string, reviewId: string, rating: number, day
 
 async function insertMyntra(productId: number, reviewId: string, rating: number, daysAgo: number): Promise<void> {
   await fixturePool.query(
-    `INSERT INTO "DataWarehouse".myntra_reviews
+    `INSERT INTO "${config.appStore.schema}".myntra_reviews
        (product_id, brand_name, review_id, rating, title, body, review_date, author_name, helpful_count, not_helpful_count, has_images, country, "createdAt", "updatedAt")
      VALUES ($1, 'InvalidateBrand', $2, $3, 't', 'b', CURRENT_DATE - $4::int, 'a', 0, 0, false, 'India', now(), now())`,
     [productId, reviewId, rating, daysAgo],
@@ -70,8 +70,8 @@ describe("AI insights cache invalidation — Cases A-D (verification pass)", () 
   });
 
   afterAll(async () => {
-    await fixturePool.query(`DELETE FROM "DataWarehouse".flipkart_reviews WHERE pid IN ($1, $2)`, [PID_X, PID_Y]);
-    await fixturePool.query(`DELETE FROM "DataWarehouse".myntra_reviews WHERE product_id = $1`, [MYNTRA_PID]);
+    await fixturePool.query(`DELETE FROM "${config.appStore.schema}".flipkart_reviews WHERE pid IN ($1, $2)`, [PID_X, PID_Y]);
+    await fixturePool.query(`DELETE FROM "${config.appStore.schema}".myntra_reviews WHERE product_id = $1`, [MYNTRA_PID]);
     await fixturePool.end();
   });
 
@@ -174,8 +174,8 @@ describe("AI insights cache invalidation — Cases A-D (verification pass)", () 
     expect(await countAiInsightRows("flipkart", sharedId)).toBe(1);
     expect(await countAiInsightRows("myntra", sharedId)).toBe(1);
 
-    await fixturePool.query(`DELETE FROM "DataWarehouse".flipkart_reviews WHERE pid = $1`, [sharedId]);
-    await fixturePool.query(`DELETE FROM "DataWarehouse".myntra_reviews WHERE product_id = $1`, [Number(sharedId)]);
+    await fixturePool.query(`DELETE FROM "${config.appStore.schema}".flipkart_reviews WHERE pid = $1`, [sharedId]);
+    await fixturePool.query(`DELETE FROM "${config.appStore.schema}".myntra_reviews WHERE product_id = $1`, [Number(sharedId)]);
   });
 
   it("Case D: the persisted/returned result preserves the complete NarratorResult contract", async () => {

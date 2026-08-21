@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { WebSocket } from "ws";
 import { appWebSocketServer, webSocketEventEmitter } from "../../src/modules/websocket/index.js";
 import type { WebSocketMessage, ProductDataUpdatedEvent } from "../../src/modules/websocket/messageTypes.js";
@@ -127,26 +127,44 @@ describe("WebSocket Server - Milestone 1", () => {
   });
 
   it("should maintain unique client IDs", async () => {
+    // Sockets from earlier tests close asynchronously, so measure the DELTA this
+    // test causes rather than assuming the server starts at zero clients.
+    const idsBefore = new Set(webSocketEventEmitter.getConnectedClients().map((c) => c.id));
+
     const ws1 = new WebSocket(`ws://localhost:${TEST_PORT}`);
     const ws2 = new WebSocket(`ws://localhost:${TEST_PORT}`);
 
-    const connected1 = await new Promise<boolean>((resolve) => {
-      ws1.onopen = () => resolve(true);
-      ws1.onerror = () => resolve(false);
-      setTimeout(() => resolve(false), 2000);
-    });
+    // Attach BOTH handlers before awaiting either.
+    //
+    // Previously ws2's onopen was registered only after `await connected1`. Both
+    // sockets are constructed together and connect to a local server, so ws2
+    // frequently opened during that await — firing 'open' with no listener
+    // attached, leaving the promise to hit its 2s timeout and resolve(false).
+    // That is the whole of this test's flakiness: it failed on 2 of 3 runs and
+    // had nothing to do with client-id uniqueness.
+    const opened = (ws: WebSocket) =>
+      new Promise<boolean>((resolve) => {
+        if (ws.readyState === WebSocket.OPEN) return resolve(true);
+        ws.onopen = () => resolve(true);
+        ws.onerror = () => resolve(false);
+        setTimeout(() => resolve(false), 2000);
+      });
 
-    const connected2 = await new Promise<boolean>((resolve) => {
-      ws2.onopen = () => resolve(true);
-      ws2.onerror = () => resolve(false);
-      setTimeout(() => resolve(false), 2000);
-    });
+    const [connected1, connected2] = await Promise.all([opened(ws1), opened(ws2)]);
 
     expect(connected1).toBe(true);
     expect(connected2).toBe(true);
 
-    const clients = webSocketEventEmitter.getConnectedClients();
-    expect(clients.length).toBe(2);
+    // Registration happens in the server's connection handler, which may land a
+    // tick after the client sees 'open'.
+    await vi.waitFor(() => {
+      const added = webSocketEventEmitter
+        .getConnectedClients()
+        .filter((c) => !idsBefore.has(c.id));
+      expect(added.length).toBe(2);
+      // The actual claim under test: the two ids are distinct.
+      expect(new Set(added.map((c) => c.id)).size).toBe(2);
+    });
 
     ws1.close();
     ws2.close();

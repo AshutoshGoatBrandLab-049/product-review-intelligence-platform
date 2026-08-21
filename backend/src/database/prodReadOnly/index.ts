@@ -3,9 +3,18 @@
  *
  * Security layer 2: no generic query executor, no dynamic table name, ever.
  * Every query lives behind one of these four functions, each referencing
- * exactly one of the two approved tables via a fixed, hardcoded literal.
- * `Object.keys()` on this module's exports must equal exactly these four
- * names — see tests/security/prodReadOnlySurface.test.ts.
+ * exactly one of the two approved tables. `Object.keys()` on this module's
+ * exports must equal exactly these four names — see
+ * tests/security/prodReadOnlySurface.test.ts.
+ *
+ * These functions read through appSequelize (the application's single
+ * connection), because source and canonical tables are co-located in one
+ * database and one schema. A second raw-`pg` pool (client.ts, `prodPool`) used
+ * to exist for a separate read-only connection; it was removed after the
+ * architecture unified, since nothing imported it — which also meant the DATE
+ * type parser it registered never ran. That parser turned out to be redundant:
+ * verified against the live database, review_date already arrives as the string
+ * "YYYY-MM-DD" through Sequelize, so no local-midnight day shift is possible.
  */
 import * as flipkart from "./flipkartReviewsRepo.js";
 import * as myntra from "./myntraReviewsRepo.js";

@@ -140,7 +140,7 @@ describe("reject deduplication (Phase 2.1 §2)", () => {
   it("Test 5: once the underlying source row becomes valid, Track B normalizes it normally — the old reject row remains as history", async () => {
     // Insert a deliberately-invalid fixture row (rating out of range).
     const { rows: inserted } = await fixturePool.query<{ id: number }>(
-      `INSERT INTO "DataWarehouse".flipkart_reviews
+      `INSERT INTO "${config.appStore.schema}".flipkart_reviews
          (brand_name, pid, review_id, rating, title, comment, review_date, product_url, author_name, verified_purchase, helpful_count, country, "createdAt", "updatedAt")
        VALUES ('B', 'DEDUP_TEST_PID', 'DEDUP-TEST-1', 0, 't', 'c', CURRENT_DATE, 'u', 'a', true, 0, 'India', now(), now())
        RETURNING id`,
@@ -156,7 +156,7 @@ describe("reject deduplication (Phase 2.1 §2)", () => {
 
       // Now the source data becomes valid (e.g. corrected upstream).
       await fixturePool.query(
-        `UPDATE "DataWarehouse".flipkart_reviews SET rating = 4, "updatedAt" = now() WHERE id = $1`,
+        `UPDATE "${config.appStore.schema}".flipkart_reviews SET rating = 4, "updatedAt" = now() WHERE id = $1`,
         [sourceRowId],
       );
 
@@ -172,7 +172,7 @@ describe("reject deduplication (Phase 2.1 §2)", () => {
       expect(rejectRowsAfterFix.length).toBe(1);
       expect(rejectRowsAfterFix[0]!.occurrenceCount).toBe(1);
     } finally {
-      await fixturePool.query(`DELETE FROM "DataWarehouse".flipkart_reviews WHERE id = $1`, [sourceRowId]);
+      await fixturePool.query(`DELETE FROM "${config.appStore.schema}".flipkart_reviews WHERE id = $1`, [sourceRowId]);
     }
   });
 });
