@@ -53,6 +53,24 @@ const envSchema = z.object({
     .default("true")
     .transform((v) => v === "true"),
 
+  /**
+   * Automatic source-table change detection.
+   *
+   * Without it nothing ever starts ingestion, so a direct INSERT/UPDATE/DELETE on
+   * a marketplace source table never reaches the dashboard. Detection reads
+   * pg_stat tuple counters (~0.7ms, no table scan, O(1) in table size).
+   *
+   * pollMs  — how often counters are checked. Detection latency is bounded by this.
+   * sweepMs — safety-net reconcile that runs even when counters look quiet, so a
+   *           stats reset or a missed signal cannot desynchronize state forever.
+   */
+  AUTO_SYNC_ENABLED: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
+  AUTO_SYNC_POLL_MS: z.coerce.number().int().positive().default(5_000),
+  AUTO_SYNC_SWEEP_MS: z.coerce.number().int().positive().default(600_000),
+
   // Phase 4 — AI provider. Defaults to "mock": this project must never
   // silently start making paid API calls just because it booted.
   AI_PROVIDER: z.enum(["mock", "anthropic", "gemini", "openai"]).default("mock"),
@@ -178,6 +196,12 @@ export const config = {
     reconcileLookbackDays: env.RECONCILE_LOOKBACK_DAYS,
     reconcileSafetyBufferDays: env.RECONCILE_SAFETY_BUFFER_DAYS,
     reconcileFullScan: env.RECONCILE_FULL_SCAN,
+  },
+
+  autoSync: {
+    enabled: env.AUTO_SYNC_ENABLED,
+    pollMs: env.AUTO_SYNC_POLL_MS,
+    sweepMs: env.AUTO_SYNC_SWEEP_MS,
   },
 
   ai: {

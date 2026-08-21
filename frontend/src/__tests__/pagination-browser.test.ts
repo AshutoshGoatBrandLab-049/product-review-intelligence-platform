@@ -1,13 +1,22 @@
 import { describe, it, beforeAll, afterAll, beforeEach, afterEach, expect } from 'vitest';
 import puppeteer, { Browser, Page } from 'puppeteer';
 
+// NOTE: page.waitForTimeout() was removed in Puppeteer v22, so every call here
+// threw and took the surrounding assertions down with it. Replaced with a plain
+// timer. `headless` was also the STRING 'false' (truthy — it ran headless
+// regardless) and is now a real boolean.
+
 describe('Pagination - Real Browser Automation Test', () => {
+  // This file launches a REAL Chrome and drives it against the running dev
+  // server, while vitest runs the other files in parallel. Under that contention
+  // short waits time out intermittently (observed 335/336 on alternate runs), so
+  // every wait here is sized for a loaded machine rather than an idle one.
   let browser: Browser;
   let page: Page;
 
   beforeAll(async () => {
     browser = await puppeteer.launch({
-      headless: 'false',
+      headless: true,
       args: ['--no-sandbox'],
     });
   });
@@ -34,7 +43,7 @@ describe('Pagination - Real Browser Automation Test', () => {
     });
 
     // Wait for table to appear
-    await page.waitForSelector('table tbody', { timeout: 5000 });
+    await page.waitForSelector('table tbody', { timeout: 45000 });
 
     // Check if products are loaded
     const productRows = await page.$$('table tbody tr');
@@ -44,7 +53,7 @@ describe('Pagination - Real Browser Automation Test', () => {
     // Get first product rank
     const firstRank = await page.$eval('table tbody tr:first-child td:first-child', (el) => el.textContent);
     console.log(`✅ First product rank: ${firstRank}`);
-  }, 30000);
+  }, 120000);
 
   it('should click Previous button and verify smooth transition', async () => {
     console.log('\n=== TEST 2: Click Previous Button ===');
@@ -53,8 +62,16 @@ describe('Pagination - Real Browser Automation Test', () => {
       waitUntil: 'networkidle2',
     });
 
-    // Wait for initial load
-    await page.waitForSelector('table tbody', { timeout: 5000 });
+    // Wait for REAL data, not the skeleton.
+    //
+    // The loading skeleton also renders <table><tbody>, so waiting on that alone
+    // returned while the page was still loading and the pagination controls had
+    // not rendered yet — which is why the Previous button was never found.
+    await page.waitForSelector('table tbody tr:not(.animate-pulse)', { timeout: 45000 });
+    await page.waitForFunction(
+      () => Array.from(document.querySelectorAll('button')).some((b) => b.textContent?.includes('Previous')),
+      { timeout: 45000 },
+    );
 
     // Get products on page 2
     const page2Products = await page.$$eval('table tbody tr', (rows) =>
@@ -88,13 +105,22 @@ describe('Pagination - Real Browser Automation Test', () => {
     });
     console.log(`${skeletonVisible ? '✅' : '❌'} Skeleton visible: ${skeletonVisible}`);
 
-    // Wait for data to load (up to 5 seconds)
+    // Wait for the transition to actually COMPLETE.
+    //
+    // "not a skeleton row" is not enough: between the click and the refetch
+    // landing, the table still holds the PREVIOUS page's real rows, so the test
+    // read stale content and the "products changed" assertion compared a row
+    // against itself. Waiting for the page indicator to move is the signal that
+    // the new data is rendered.
     await page.waitForFunction(
-      () => {
+      (expected) => {
         const rows = document.querySelectorAll('table tbody tr');
-        return rows.length > 0 && !rows[0].classList.contains('animate-pulse');
+        const settled = rows.length > 0 && !rows[0].classList.contains('animate-pulse');
+        const label = document.querySelector('.text-gray-300')?.textContent ?? '';
+        return settled && label.includes(`Page ${expected}`);
       },
-      { timeout: 5000 }
+      { timeout: 45000 },
+      2,
     );
 
     const loadTime = Date.now() - startTime;
@@ -110,11 +136,19 @@ describe('Pagination - Real Browser Automation Test', () => {
     expect(page1Products[0]).not.toEqual(page2Products[0]);
     console.log('✅ Products changed correctly');
 
-    // Check page indicator
+    // Check page indicator.
+    //
+    // `?page=N` is ZERO-BASED throughout the app (handleProductClick navigates
+    // with page=${currentPage}, which is 0-based) while the indicator displays
+    // N+1. So ?page=2 shows "Page 3 of 4", and Previous lands on "Page 2 of 4".
+    // Asserting a literal "Page 1" encoded a 1-based URL convention the app has
+    // never used. Assert the actual invariant instead: Previous decrements.
     const pageText = await page.$eval('.text-gray-300', (el) => el.textContent);
     console.log(`📄 Page indicator: ${pageText}`);
-    expect(pageText).toContain('Page 1');
-  }, 30000);
+
+    const shown = Number(pageText?.match(/Page (\d+)/)?.[1]);
+    expect(shown, `unexpected page indicator: ${pageText}`).toBe(2);
+  }, 120000);
 
   it('should click Next button multiple times and verify performance', async () => {
     console.log('\n=== TEST 3: Multiple Next Clicks ===');
@@ -123,7 +157,7 @@ describe('Pagination - Real Browser Automation Test', () => {
       waitUntil: 'networkidle2',
     });
 
-    await page.waitForSelector('table tbody', { timeout: 5000 });
+    await page.waitForSelector('table tbody', { timeout: 45000 });
 
     const results = [];
 
@@ -139,7 +173,7 @@ describe('Pagination - Real Browser Automation Test', () => {
       });
 
       // Wait for transition
-      await page.waitForTimeout(100);
+      await new Promise((r) => setTimeout(r, 100));
 
       // Wait for skeleton to disappear
       await page.waitForFunction(
@@ -147,7 +181,7 @@ describe('Pagination - Real Browser Automation Test', () => {
           const rows = document.querySelectorAll('table tbody tr');
           return rows.length > 0 && !rows[0].classList.contains('animate-pulse');
         },
-        { timeout: 5000 }
+        { timeout: 45000 }
       );
 
       const loadTime = Date.now() - startTime;
@@ -170,7 +204,7 @@ describe('Pagination - Real Browser Automation Test', () => {
       waitUntil: 'networkidle2',
     });
 
-    await page.waitForSelector('table tbody', { timeout: 5000 });
+    await page.waitForSelector('table tbody', { timeout: 45000 });
 
     // Measure scroll to top speed
     const startScroll = Date.now();
@@ -183,14 +217,14 @@ describe('Pagination - Real Browser Automation Test', () => {
     });
 
     // Check if scroll happens
-    await page.waitForTimeout(50);
+    await new Promise((r) => setTimeout(r, 50));
     const scrollY = await page.evaluate(() => window.scrollY);
     const scrollTime = Date.now() - startScroll;
 
     console.log(`⏱️  Scroll time: ${scrollTime}ms`);
     console.log(`📍 Scroll position: ${scrollY}px`);
     console.log(`${scrollY < 100 ? '✅' : '❌'} Scroll to top instant: ${scrollY < 100}`);
-  }, 30000);
+  }, 120000);
 
   it('should verify skeleton shows on page transition', async () => {
     console.log('\n=== TEST 5: Skeleton Visibility ===');
@@ -199,7 +233,7 @@ describe('Pagination - Real Browser Automation Test', () => {
       waitUntil: 'networkidle2',
     });
 
-    await page.waitForSelector('table tbody', { timeout: 5000 });
+    await page.waitForSelector('table tbody', { timeout: 45000 });
 
     // Click Next
     await page.evaluate(() => {
@@ -212,7 +246,7 @@ describe('Pagination - Real Browser Automation Test', () => {
     const skeletonTimeline = [];
 
     for (let i = 0; i < 10; i++) {
-      await page.waitForTimeout(100);
+      await new Promise((r) => setTimeout(r, 100));
 
       const isSkeletonVisible = await page.evaluate(() => {
         const rows = document.querySelectorAll('table tbody tr');
@@ -227,5 +261,5 @@ describe('Pagination - Real Browser Automation Test', () => {
 
     console.log(`📊 Skeleton visibility timeline (every 100ms): ${skeletonTimeline}`);
     console.log(`${skeletonTimeline[0] ? '✅' : '❌'} Skeleton appears immediately: ${skeletonTimeline[0]}`);
-  }, 30000);
+  }, 120000);
 });

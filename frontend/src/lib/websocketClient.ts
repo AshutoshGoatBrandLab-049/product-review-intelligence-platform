@@ -4,7 +4,7 @@
  */
 
 export interface WebSocketEvent {
-  type: "PRODUCT_DATA_UPDATED" | "CONNECTION" | string;
+  type: "PRODUCT_DATA_UPDATED" | "CONNECTION" | "CONNECTION_RESTORED" | string;
   platform?: "flipkart" | "myntra";
   sourceProductId?: string;
   changedAt?: string;
@@ -24,47 +24,86 @@ class WebSocketClient {
   private authToken: string | null = null;
   private messageQueue: string[] = [];
   private reconnectAttempts = 0;
-  private maxReconnectAttempts = 10;
   private reconnectDelay = 1000; // Start at 1s
   private maxReconnectDelay = 30000; // Cap at 30s
   private reconnectTimer: NodeJS.Timeout | null = null;
   private heartbeatTimer: NodeJS.Timeout | null = null;
   private eventListeners = new Map<string, Set<EventCallback>>();
   private isIntentionallyClosed = false;
+  /** In-flight connect, so concurrent callers share one socket instead of racing. */
+  private connecting: Promise<void> | null = null;
+  /** Recently seen message ids — the server may redeliver, and handlers must be idempotent. */
+  private seenMessageIds = new Set<string>();
+  private seenOrder: string[] = [];
 
   constructor(url: string) {
     this.url = url;
   }
 
   /**
-   * Connect to WebSocket with authentication
+   * Connect to WebSocket with authentication.
+   *
+   * Guards against CONNECTING as well as OPEN. Previously only OPEN was checked,
+   * so two near-simultaneous callers each constructed a socket; the second
+   * overwrote `this.ws` while the first stayed open, and every broadcast was
+   * delivered twice (observed: 2 connections to :8080 from a single page).
    */
   connect(authToken: string): Promise<void> {
-    return new Promise((resolve, reject) => {
-      if (this.ws?.readyState === WebSocket.OPEN) {
-        resolve();
-        return;
-      }
+    if (this.ws?.readyState === WebSocket.OPEN) return Promise.resolve();
+    if (this.connecting) return this.connecting;
 
+    this.connecting = new Promise<void>((resolve, reject) => {
       this.authToken = authToken;
       this.isIntentionallyClosed = false;
 
       try {
+        // Discard any half-open socket before replacing it, so it cannot linger
+        // and keep receiving frames.
+        if (this.ws && this.ws.readyState !== WebSocket.CLOSED) {
+          try {
+            this.ws.onclose = null;
+            this.ws.close();
+          } catch {
+            /* already closing */
+          }
+        }
         this.ws = new WebSocket(this.url);
 
         this.ws.onopen = () => {
           console.log("[WebSocket] Connected");
+          const wasReconnect = this.reconnectAttempts > 0;
           this.reconnectAttempts = 0;
           this.reconnectDelay = 1000;
           this.authenticate();
           this.startHeartbeat();
           this.flushMessageQueue();
+
+          /**
+           * A WebSocket is not a durable queue. Any PRODUCT_DATA_UPDATED emitted
+           * while this tab was disconnected is gone — there is no replay — so the
+           * database can be fully converged while the tab still shows stale data
+           * forever (observed: 9 rows synced during a ~50s outage, UI never
+           * caught up).
+           *
+           * Reconnecting therefore means "I may have missed something". Consumers
+           * subscribe to this and resync, which is what turns reconnection into
+           * actual recovery rather than just a live socket.
+           */
+          if (wasReconnect) {
+            console.log("[WebSocket] Reconnected — requesting resync");
+            this.handleEvent({ type: "CONNECTION_RESTORED", timestamp: new Date().toISOString() });
+          }
           resolve();
         };
 
         this.ws.onmessage = (event) => {
           try {
             const msg = JSON.parse(event.data);
+            // Drop redeliveries. One logical source change can be re-broadcast
+            // (reconnect, retry, or a second instance), and handlers refetch —
+            // so a duplicate is wasted work, not a correctness problem, but it
+            // is cheap to suppress here rather than in every consumer.
+            if (msg.id && this.hasSeen(msg.id)) return;
             if (msg.event) {
               this.handleEvent(msg.event);
             }
@@ -75,6 +114,7 @@ class WebSocketClient {
 
         this.ws.onclose = () => {
           console.log("[WebSocket] Disconnected");
+          this.connecting = null;
           this.stopHeartbeat();
           if (!this.isIntentionallyClosed) {
             this.scheduleReconnect();
@@ -83,12 +123,30 @@ class WebSocketClient {
 
         this.ws.onerror = (error) => {
           console.error("[WebSocket] Error:", error);
+          this.connecting = null;
           reject(error);
         };
       } catch (err) {
+        this.connecting = null;
         reject(err);
       }
+    }).finally(() => {
+      this.connecting = null;
     });
+
+    return this.connecting;
+  }
+
+  /** Bounded LRU of message ids; returns true if this id was already handled. */
+  private hasSeen(id: string): boolean {
+    if (this.seenMessageIds.has(id)) return true;
+    this.seenMessageIds.add(id);
+    this.seenOrder.push(id);
+    if (this.seenOrder.length > 500) {
+      const evicted = this.seenOrder.shift();
+      if (evicted) this.seenMessageIds.delete(evicted);
+    }
+    return false;
   }
 
   /**
@@ -145,11 +203,15 @@ class WebSocketClient {
    * Schedule automatic reconnection with exponential backoff
    */
   private scheduleReconnect(): void {
-    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      console.error("[WebSocket] Max reconnection attempts reached");
-      return;
-    }
-
+    // Retry FOREVER, with the delay capped at maxReconnectDelay.
+    //
+    // This used to stop permanently after 10 attempts. A backend restart that
+    // took longer than the ~30s those attempts covered left the tab silently
+    // disconnected for the rest of its life: the database kept synchronizing,
+    // events kept being emitted, and that browser never heard another one — with
+    // no error shown and no way back except a manual page reload, which is
+    // precisely what this feature exists to avoid. A capped-backoff retry costs
+    // one connection attempt every 30s while the server is down.
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
 
     this.reconnectAttempts++;
@@ -158,7 +220,7 @@ class WebSocketClient {
       this.maxReconnectDelay
     );
 
-    console.log(`[WebSocket] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
+    console.log(`[WebSocket] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
 
     this.reconnectTimer = setTimeout(() => {
       if (this.authToken && !this.isIntentionallyClosed) {

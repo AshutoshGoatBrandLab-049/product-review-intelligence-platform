@@ -7,7 +7,7 @@ import { useEvidenceReviews } from "@/hooks/queries/useEvidence";
 import { useWebSocketEvent } from "@/hooks/useWebSocket";
 import { queryKeys } from "@/api/queryKeys";
 import { AIAnalystPanel } from "@/components/ai/AIAnalystPanel";
-import { WindowSelector } from "@/components/intelligence/WindowSelector";
+import { DateRangeSelector } from "@/components/intelligence/DateRangeSelector";
 import { MetricCard } from "@/components/intelligence/MetricCard";
 import { KpiSkeleton } from "@/components/intelligence/KpiSkeleton";
 import { RatingDistribution } from "@/components/intelligence/RatingDistribution";
@@ -25,13 +25,30 @@ import { ErrorState } from "@/components/states/ErrorState";
 import { EmptyState } from "@/components/states/EmptyState";
 import { InsufficientDataState } from "@/components/states/InsufficientDataState";
 import { splitSignalsByReadiness } from "@/lib/signals";
-import type { NamedWindow, Platform } from "@/types/api";
+import type { Platform } from "@/types/api";
+import { defaultRange, daysAgoIso, todayIso, type DateRange } from "@/components/intelligence/DateRangeSelector";
 
-const NAMED_WINDOWS: NamedWindow[] = ["7d", "30d", "60d", "90d", "6m", "12m"];
-const DEFAULT_WINDOW: NamedWindow = "30d";
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
-function readWindowParam(raw: string | null): NamedWindow {
-  return (NAMED_WINDOWS as string[]).includes(raw ?? "") ? (raw as NamedWindow) : DEFAULT_WINDOW;
+/**
+ * Read the analysis range from the URL, defaulting to the last 30 days.
+ *
+ * Also accepts a legacy `?window=30d` link and converts it, so bookmarks and
+ * links shared before the range picker existed still land somewhere sensible
+ * instead of silently snapping to the default.
+ */
+function readRangeParam(params: URLSearchParams): DateRange {
+  const from = params.get("from");
+  const to = params.get("to");
+  if (from && to && ISO_DATE.test(from) && ISO_DATE.test(to) && from <= to) {
+    return { from, to };
+  }
+
+  const legacy: Record<string, number> = { "7d": 7, "30d": 30, "60d": 60, "90d": 90, "6m": 182, "12m": 365 };
+  const days = legacy[params.get("window") ?? ""];
+  if (days) return { from: daysAgoIso(days), to: todayIso() };
+
+  return defaultRange();
 }
 
 /**
@@ -69,11 +86,13 @@ export function ProductDetail() {
       navigate("/products");
     }
   };
-  const window_ = readWindowParam(searchParams.get("window"));
+  const window_ = readRangeParam(searchParams);
 
-  function handleWindowChange(next: NamedWindow) {
+  function handleWindowChange(next: DateRange) {
     const next_ = new URLSearchParams(searchParams);
-    next_.set("window", next);
+    next_.set("from", next.from);
+    next_.set("to", next.to);
+    next_.delete("window"); // drop the legacy param once a real range is chosen
     setSearchParams(next_, { replace: true });
   }
 
@@ -81,7 +100,7 @@ export function ProductDetail() {
   const signalsQuery = useProductSignals(platform, sourceProductId, window_);
 
   const [requestedForKey, setRequestedForKey] = useState<string | null>(null);
-  const currentKey = `${platform}:${sourceProductId}:${window_}`;
+  const currentKey = `${platform}:${sourceProductId}:${window_.from}:${window_.to}`;
   const insightRequested = requestedForKey === currentKey;
 
   const insightsQuery = useProductInsights(platform, sourceProductId, window_, insightRequested);
@@ -102,6 +121,29 @@ export function ProductDetail() {
     });
 
     // Only invalidate insights if they've been requested (don't auto-fetch)
+    if (insightRequested) {
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.productInsights(platform, sourceProductId, window_),
+      });
+    }
+  });
+
+  /**
+   * Resync after the socket comes back.
+   *
+   * Any PRODUCT_DATA_UPDATED emitted while this tab was disconnected is lost —
+   * a WebSocket has no replay — so reconnection is the only cue that this
+   * product's data may have changed underneath us. Scoped to the product on
+   * screen, so it stays a narrow refetch rather than a full-page refresh.
+   */
+  useWebSocketEvent("CONNECTION_RESTORED", () => {
+    if (!platform || !sourceProductId) return;
+    queryClient.invalidateQueries({
+      queryKey: queryKeys.productDetail(platform, sourceProductId, window_),
+    });
+    queryClient.invalidateQueries({
+      queryKey: queryKeys.productSignals(platform, sourceProductId, window_),
+    });
     if (insightRequested) {
       queryClient.invalidateQueries({
         queryKey: queryKeys.productInsights(platform, sourceProductId, window_),
@@ -159,7 +201,7 @@ export function ProductDetail() {
           </div>
         </div>
         <div className="shrink-0">
-          <WindowSelector value={window_} onChange={handleWindowChange} />
+          <DateRangeSelector value={window_} onChange={handleWindowChange} />
         </div>
       </div>
 
@@ -370,7 +412,7 @@ export function ProductDetail() {
                   <div className="space-y-2">
                     <p className="text-sm font-medium text-foreground">Ask AI to analyze this product</p>
                     <p className="text-xs text-muted-foreground">
-                      AI will examine the trends, themes, and patterns in the {window_ === "7d" ? "last 7 days" : window_ === "30d" ? "last 30 days" : window_ === "60d" ? "last 60 days" : window_ === "90d" ? "last 90 days" : window_ === "6m" ? "last 6 months" : "last 12 months"} for <strong className="text-foreground">{sourceProductId}</strong> on {platform === "flipkart" ? "Flipkart" : "Myntra"}.
+                      AI will examine the trends, themes, and patterns from {window_.from} to {window_.to} for <strong className="text-foreground">{sourceProductId}</strong> on {platform === "flipkart" ? "Flipkart" : "Myntra"}.
                     </p>
                   </div>
 

@@ -1,5 +1,6 @@
 import { Router, type Request, type Response } from "express";
 import { runIngestion } from "../../modules/ingestion/runIngestion.js";
+import { LockHeldError } from "../../modules/ingestion/watermarkRepo.js";
 import { logger } from "../../shared/logger.js";
 import type { Platform } from "../../types/unifiedReview.js";
 
@@ -32,6 +33,25 @@ router.post("/ingestion/trigger", async (req: Request, res: Response) => {
       result,
     });
   } catch (error) {
+    /**
+     * Lock contention is NOT a server error.
+     *
+     * Another instance (or the automatic detector) already holding the platform
+     * lock is normal, expected behaviour under multiple app instances — verified:
+     * two backends triggered simultaneously produced one success and one refusal,
+     * with no duplicate rows. Reporting that as 500 would page someone for the
+     * system working correctly, and would hide real failures in the same bucket.
+     * 409 Conflict says "retry later", which is exactly right.
+     */
+    if (error instanceof LockHeldError) {
+      logger.info({ error: error.message }, "Ingestion trigger skipped — lock held by another worker");
+      res.status(409).json({
+        status: "conflict",
+        message: (error as Error).message,
+      });
+      return;
+    }
+
     logger.error({ error: (error as Error).message }, "[OPTION-B] Ingestion API failed");
     res.status(500).json({
       status: "error",

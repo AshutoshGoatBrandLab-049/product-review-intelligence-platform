@@ -19,7 +19,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-const UI = "http://localhost:5174";
+const UI = "http://localhost:5173";
 const API = "http://localhost:4000";
 const SCHEMA = "DataWarehouse";
 const TAG = "E2ECUD";

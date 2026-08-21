@@ -6,6 +6,7 @@ import { MemoryRouter, Routes, Route, useLocation } from "react-router-dom";
 import { ProductDetail } from "@/pages/ProductDetail";
 import { ApiClientError } from "@/api/errors";
 import type { ProductDetailResponse, ProductSignalsResponse, ProductInsightsResponse, HealthScore, EarlyWarningSignal, EvidenceReviewsResponse, ReviewDetail } from "@/types/api";
+import { daysAgoIso, todayIso } from "@/components/intelligence/DateRangeSelector";
 
 const { getProductDetailMock, getProductSignalsMock, getProductInsightsMock, getEvidenceReviewsMock, getOrCreateConversationMock, analyzeProductQuestionMock } = vi.hoisted(() => ({
   getProductDetailMock: vi.fn(),
@@ -468,21 +469,64 @@ describe("ProductDetail (Phase 7 Step 3)", () => {
     expect(getProductInsightsMock).toHaveBeenCalledTimes(1);
   });
 
-  it("23. changing the window updates the URL and refetches product/signals data", async () => {
+  it("23. changing the range updates the URL and refetches product/signals data", async () => {
+    // The window control is now a DATE RANGE, not the six fixed tabs, so the
+    // preset is a button and the URL carries from/to instead of window=90d.
     getProductDetailMock.mockResolvedValue(makeDetailResponse());
     getProductSignalsMock.mockResolvedValue(makeSignalsResponse());
     renderProductDetail();
     await screen.findByText("PID001");
     const user = userEvent.setup();
-    await user.click(screen.getByRole("tab", { name: "90d" }));
+    await user.click(screen.getByRole("button", { name: "90d" }));
+
+    const expectedRange = { from: daysAgoIso(90), to: todayIso() };
     await waitFor(() => {
-      expect(getProductDetailMock).toHaveBeenCalledWith("flipkart", "PID001", "90d", expect.anything());
-      expect(getProductSignalsMock).toHaveBeenCalledWith("flipkart", "PID001", "90d", expect.anything());
+      expect(getProductDetailMock).toHaveBeenCalledWith("flipkart", "PID001", expectedRange, expect.anything());
+      expect(getProductSignalsMock).toHaveBeenCalledWith("flipkart", "PID001", expectedRange, expect.anything());
     });
-    expect(screen.getByTestId("location-search").textContent).toContain("window=90d");
+
+    const search = screen.getByTestId("location-search").textContent ?? "";
+    expect(search).toContain(`from=${expectedRange.from}`);
+    expect(search).toContain(`to=${expectedRange.to}`);
   });
 
-  it("24. changing the window does NOT automatically call the AI insights endpoint", async () => {
+  it("23b. an explicit custom range is applied and reaches the API", async () => {
+    getProductDetailMock.mockResolvedValue(makeDetailResponse());
+    getProductSignalsMock.mockResolvedValue(makeSignalsResponse());
+    renderProductDetail();
+    await screen.findByText("PID001");
+    const user = userEvent.setup();
+
+    await user.clear(screen.getByLabelText("Start date"));
+    await user.type(screen.getByLabelText("Start date"), "2026-01-05");
+    await user.clear(screen.getByLabelText("End date"));
+    await user.type(screen.getByLabelText("End date"), "2026-02-10");
+    await user.click(screen.getByRole("button", { name: "Apply" }));
+
+    await waitFor(() =>
+      expect(getProductDetailMock).toHaveBeenCalledWith(
+        "flipkart",
+        "PID001",
+        { from: "2026-01-05", to: "2026-02-10" },
+        expect.anything(),
+      ),
+    );
+  });
+
+  it("23c. defaults to the last 30 days when the URL carries no range", async () => {
+    getProductDetailMock.mockResolvedValue(makeDetailResponse());
+    getProductSignalsMock.mockResolvedValue(makeSignalsResponse());
+    renderProductDetail();
+    await screen.findByText("PID001");
+    expect(getProductDetailMock).toHaveBeenCalledWith(
+      "flipkart",
+      "PID001",
+      { from: daysAgoIso(30), to: todayIso() },
+      expect.anything(),
+    );
+  });
+
+  it("24. changing the range does NOT automatically call the AI insights endpoint", async () => {
     getProductDetailMock.mockResolvedValue(makeDetailResponse());
     getProductSignalsMock.mockResolvedValue(makeSignalsResponse());
     getProductInsightsMock.mockResolvedValue(makeInsightsResponse());
@@ -492,8 +536,15 @@ describe("ProductDetail (Phase 7 Step 3)", () => {
     await screen.findByText("Reviews indicate quality is the most common negative theme.");
     expect(getProductInsightsMock).toHaveBeenCalledTimes(1);
 
-    await user.click(screen.getByRole("tab", { name: "90d" }));
-    await waitFor(() => expect(getProductDetailMock).toHaveBeenCalledWith("flipkart", "PID001", "90d", expect.anything()));
+    await user.click(screen.getByRole("button", { name: "90d" }));
+    await waitFor(() =>
+      expect(getProductDetailMock).toHaveBeenCalledWith(
+        "flipkart",
+        "PID001",
+        { from: daysAgoIso(90), to: todayIso() },
+        expect.anything(),
+      ),
+    );
     // The AI section must revert to "ask AI to analyze" state for the new window, and no second AI call happens automatically.
     expect(await screen.findByText("Ask AI to analyze this product")).toBeInTheDocument();
     expect(getProductInsightsMock).toHaveBeenCalledTimes(1);

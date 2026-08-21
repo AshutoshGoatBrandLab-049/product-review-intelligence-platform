@@ -10,7 +10,7 @@
 
 import { test, expect } from "@playwright/test";
 
-const UI = "http://localhost:5174";
+const UI = "http://localhost:5173";
 
 test.describe("live data verification", () => {
   test("Myntra ranking list renders repaired data with real brands", async ({ page }) => {

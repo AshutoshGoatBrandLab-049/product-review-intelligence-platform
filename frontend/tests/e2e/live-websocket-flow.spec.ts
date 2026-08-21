@@ -28,7 +28,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-const UI = "http://localhost:5174";
+const UI = "http://localhost:5173";
 const API = "http://localhost:4000";
 const SCHEMA = "DataWarehouse";
 const TEST_PRODUCT = "999900001";       // does not collide with real myntra product ids

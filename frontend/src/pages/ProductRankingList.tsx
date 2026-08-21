@@ -61,9 +61,6 @@ const ProductRowMemo = memo(function ProductRow({ product, type, loading, onProd
 interface CustomDateRangeInputProps {
   fromDate: string;
   toDate: string;
-  platform: string | undefined;
-  type: string | undefined;
-  sortBy: "default" | "ratingAsc" | "ratingDesc";
   onFromDateChange: (value: string) => void;
   onToDateChange: (value: string) => void;
   onApply: () => void;
@@ -73,9 +70,6 @@ interface CustomDateRangeInputProps {
 const CustomDateRangeInput = memo(function CustomDateRange({
   fromDate,
   toDate,
-  platform,
-  type,
-  sortBy,
   onFromDateChange,
   onToDateChange,
   onApply,
@@ -365,8 +359,35 @@ export function ProductRankingList() {
       // sessionStorage unavailable — the refetch below still corrects the view.
     }
 
-    // Refetch the current view in place. No page reload, and pagination /
-    // filter / sort state is preserved because the same params are reused.
+    void refreshCurrentView();
+  });
+
+  /**
+   * Resync after the socket comes back.
+   *
+   * Events emitted while this tab was disconnected are gone — a WebSocket has no
+   * replay — so reconnecting is the only signal that data may have moved on
+   * without us. Without this the database can be fully up to date while the tab
+   * shows stale rows indefinitely.
+   */
+  useWebSocketEvent("CONNECTION_RESTORED", () => {
+    if (!platform || !type) return;
+    try {
+      const keysToDelete: string[] = [];
+      for (let i = 0; i < sessionStorage.length; i++) {
+        const key = sessionStorage.key(i);
+        if (key && key.startsWith(`ranking-${platform}-`)) keysToDelete.push(key);
+      }
+      keysToDelete.forEach((key) => sessionStorage.removeItem(key));
+    } catch {
+      /* the refetch below still corrects the view */
+    }
+    void refreshCurrentView();
+  });
+
+  // Refetch the current view in place. No page reload, and pagination /
+  // filter / sort state is preserved because the same params are reused.
+  function refreshCurrentView() {
     const performRefresh = async () => {
       try {
         const result = await getReviewsOverview({
@@ -395,7 +416,7 @@ export function ProductRankingList() {
     };
 
     performRefresh();
-  });
+  }
 
   const handleProductClick = (sourceProductId: string) => {
     saveScrollPosition(); // ✅ Save before navigation
@@ -575,9 +596,6 @@ export function ProductRankingList() {
             <CustomDateRangeInput
               fromDate={customDateInputs.fromDate}
               toDate={customDateInputs.toDate}
-              platform={platform}
-              type={type}
-              sortBy={sortBy}
               onFromDateChange={(val) => setCustomDateInputs(prev => ({ ...prev, fromDate: val }))}
               onToDateChange={(val) => setCustomDateInputs(prev => ({ ...prev, toDate: val }))}
               onApply={async () => {

@@ -84,7 +84,7 @@ export const RETENTION_REPLACEMENT_THRESHOLD = 0.05;
  * so every Flipkart cleanup threw `column fr.product_id does not exist` and rolled
  * the transaction back. Encoding it here once removes that whole class of bug.
  */
-const SOURCE_TABLES: Record<Platform, { table: string; productIdColumn: string; reviewIdColumn: string }> = {
+export const SOURCE_TABLES: Record<Platform, { table: string; productIdColumn: string; reviewIdColumn: string }> = {
   flipkart: { table: "flipkart_reviews", productIdColumn: "pid", reviewIdColumn: "review_id" },
   myntra: { table: "myntra_reviews", productIdColumn: "product_id", reviewIdColumn: "review_id" },
 };

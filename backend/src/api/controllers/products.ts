@@ -4,16 +4,25 @@ import { computeHealthScore } from "../../modules/analytics/healthScore.js";
 import { detectProductSignals } from "../../modules/analytics/earlyWarning.js";
 import { getOrGenerateProductInsight } from "../../modules/ai/insightsCache.js";
 import { createAiProvider } from "../../modules/ai/providers/providerFactory.js";
-import { resolveNamedWindow } from "../../modules/analytics/dateWindows.js";
+import { resolveNamedWindow, customWindow } from "../../modules/analytics/dateWindows.js";
 import { getValidatedParams, getValidatedQuery } from "../middleware/validate.js";
 import type { ProductParams, WindowQuery } from "../schemas.js";
+
+/**
+ * An explicit from/to range wins over the named window.
+ *
+ * The schema guarantees they arrive together and in order, so this only has to
+ * decide which of the two the caller meant — it never has to repair a range.
+ */
+function resolveWindowQuery(q: WindowQuery) {
+  return q.from && q.to ? customWindow(q.from, q.to) : resolveNamedWindow(q.window);
+}
 
 /** GET /v1/products/:platform/:sourceProductId — thin: resolves the window,
  * calls the two existing analytics functions, returns their results as-is. */
 export async function getProductDetail(req: Request, res: Response): Promise<void> {
   const { platform, sourceProductId } = getValidatedParams<ProductParams>(req);
-  const { window: namedWindow } = getValidatedQuery<WindowQuery>(req);
-  const window = resolveNamedWindow(namedWindow);
+  const window = resolveWindowQuery(getValidatedQuery<WindowQuery>(req));
 
   const [analytics, health] = await Promise.all([
     computeProductAnalytics(platform, sourceProductId, window),
@@ -27,8 +36,7 @@ export async function getProductDetail(req: Request, res: Response): Promise<voi
  * through to detectProductSignals; no filtering/reshaping of its output. */
 export async function getProductSignals(req: Request, res: Response): Promise<void> {
   const { platform, sourceProductId } = getValidatedParams<ProductParams>(req);
-  const { window: namedWindow } = getValidatedQuery<WindowQuery>(req);
-  const window = resolveNamedWindow(namedWindow);
+  const window = resolveWindowQuery(getValidatedQuery<WindowQuery>(req));
 
   const signals = await detectProductSignals(platform, sourceProductId, window);
   res.json({ platform, sourceProductId, window, signals });
@@ -41,8 +49,7 @@ export async function getProductSignals(req: Request, res: Response): Promise<vo
  */
 export async function getProductInsights(req: Request, res: Response): Promise<void> {
   const { platform, sourceProductId } = getValidatedParams<ProductParams>(req);
-  const { window: namedWindow } = getValidatedQuery<WindowQuery>(req);
-  const window = resolveNamedWindow(namedWindow);
+  const window = resolveWindowQuery(getValidatedQuery<WindowQuery>(req));
 
   const provider = createAiProvider();
   const { result, cacheHit } = await getOrGenerateProductInsight(platform, sourceProductId, window, provider);

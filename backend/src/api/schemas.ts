@@ -26,9 +26,33 @@ export const FamilyParamsSchema = z.object({
   familyId: z.string().trim().uuid(),
 });
 
-export const WindowQuerySchema = z.object({
-  window: NamedWindowSchema.default("30d"),
-});
+/** YYYY-MM-DD, the same shape review_date uses. */
+const isoDateField = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, "Expected YYYY-MM-DD");
+
+/**
+ * Analysis window: either one of the six named windows, or an explicit
+ * `from`/`to` range.
+ *
+ * `from` and `to` must be supplied together — half a range is a client bug, and
+ * silently falling back to the named window would answer a different question
+ * than the one asked without saying so. `to` must not precede `from`.
+ */
+export const WindowQuerySchema = z
+  .object({
+    window: NamedWindowSchema.default("30d"),
+    from: isoDateField.optional(),
+    to: isoDateField.optional(),
+  })
+  .refine((q) => (q.from === undefined) === (q.to === undefined), {
+    message: "from and to must be provided together",
+    path: ["from"],
+  })
+  .refine((q) => !q.from || !q.to || q.from <= q.to, {
+    message: "from must be on or before to",
+    path: ["from"],
+  });
 
 export const RankingsQuerySchema = z.object({
   window: NamedWindowSchema.default("30d"),

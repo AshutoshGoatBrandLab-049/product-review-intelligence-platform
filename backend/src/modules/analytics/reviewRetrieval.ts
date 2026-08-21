@@ -30,7 +30,12 @@ export interface ReviewRetrievalFilters {
    * timeframeResolution.ts's "last 5 days" parsing), so a resolved timeframe
    * can actually override the window instead of being invisible to retrieval.
    */
-  window: NamedWindow | DateWindow;
+  /**
+   * OPTIONAL. Omit (or pass null) to search the product's ENTIRE review history
+   * with no date restriction — see the guard in retrieveReviews() for why the
+   * absence of a window must never be turned into a default one.
+   */
+  window?: NamedWindow | DateWindow | null;
   limit?: number;
   rating?: number;
   sentiment?: "positive" | "neutral" | "negative";
@@ -95,22 +100,36 @@ const MAX_LIMIT = 100;
  * so truncation can be reported truthfully.
  */
 export async function retrieveReviews(filters: ReviewRetrievalFilters): Promise<ReviewRetrievalResult> {
-  const resolvedWindow = isDateWindow(filters.window) ? filters.window : resolveNamedWindow(filters.window);
   const schema = config.appStore.schema;
 
   const conditions: string[] = [
     `nr.platform = :platform`,
     `nr.source_product_id = :sourceProductId`,
-    `nr.review_date >= :start`,
-    `nr.review_date <= :end`,
   ];
 
   const replacements: Record<string, unknown> = {
     platform: filters.platform,
     sourceProductId: filters.sourceProductId,
-    start: resolvedWindow.start,
-    end: resolvedWindow.end,
   };
+
+  /**
+   * NO window means NO date restriction — every review for the product.
+   *
+   * `window` used to be required, so callers with nothing to say about dates had
+   * to invent a value, and the AI Analyst's default of "30d" silently truncated
+   * "give me all the reviews" to whatever fell in the last month (observed: 2 of
+   * 20 returned, with the answer still phrased as if it were all of them). A
+   * date filter must be something the caller ASKS for, never something they get
+   * by omission.
+   */
+  if (filters.window) {
+    const resolvedWindow = isDateWindow(filters.window)
+      ? filters.window
+      : resolveNamedWindow(filters.window);
+    conditions.push(`nr.review_date >= :start`, `nr.review_date <= :end`);
+    replacements.start = resolvedWindow.start;
+    replacements.end = resolvedWindow.end;
+  }
 
   if (filters.rating !== undefined) {
     conditions.push(`nr.rating = :rating`);

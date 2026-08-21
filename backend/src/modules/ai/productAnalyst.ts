@@ -72,10 +72,22 @@ function extractLatestNReviewsCount(question: string): number | null {
 }
 
 /**
- * Detect what time window the user is asking about from their natural language question.
- * Returns the detected window or defaults to "30d".
+ * Detect what time window the user is asking about from their natural language
+ * question. Returns NULL when the question names no timeframe at all.
+ *
+ * Null is the important case. This used to fall through to "30d", so a question
+ * with no date in it — "give me all the reviews" — was silently answered from
+ * the last 30 days only: 2 of a product's 20 reviews came back, phrased as
+ * though that were all of them. The dashboard's own window selector is for the
+ * analytics panels; it must never become an invisible filter on what the analyst
+ * is allowed to see. A date restriction now happens only when the user asks for
+ * one.
+ *
+ * NOTE the ordering: "last 7"/"last 6" must be tested before bare-number
+ * prefixes could shadow them, and "last 20 reviews" is a QUANTITY, not a
+ * timeframe — it correctly returns null here and is handled as a limit.
  */
-function detectWindowFromQuestion(question: string): NamedWindow {
+function detectWindowFromQuestion(question: string): NamedWindow | null {
   const lowerQ = question.toLowerCase();
 
   if (lowerQ.includes("last 7") || lowerQ.includes("past 7") || lowerQ.includes("7 day")) return "7d";
@@ -85,7 +97,7 @@ function detectWindowFromQuestion(question: string): NamedWindow {
   if (lowerQ.includes("last 6") || lowerQ.includes("past 6") || lowerQ.includes("6 month")) return "6m";
   if (lowerQ.includes("last year") || lowerQ.includes("past year") || lowerQ.includes("yearly")) return "12m";
 
-  return "30d";
+  return null;
 }
 
 /**
@@ -284,7 +296,18 @@ export async function analyzeProductQuestion(
   request: ProductAnalystRequest,
   aiProvider: AiProvider,
 ): Promise<ProductAnalystResponse> {
-  const namedWindow = detectWindowFromQuestion(request.userQuestion);
+  /**
+   * Two different needs, deliberately not the same value:
+   *
+   *  - ANALYSIS (health score, trend, period comparison) is window-based by
+   *    definition — "is this getting worse?" is meaningless without a period —
+   *    so it falls back to 30d when the user names no timeframe.
+   *  - RETRIEVAL ("show me the reviews") has no such requirement, and defaulting
+   *    it to a window is how "give me all the reviews" quietly became "the 2
+   *    from the last month". That path uses detectWindowFromQuestion() directly
+   *    and passes NO window when the user named none.
+   */
+  const namedWindow = detectWindowFromQuestion(request.userQuestion) ?? "30d";
 
   // Load prior-turn context, if a conversation was supplied.
   let priorContext: PriorTurnContext | undefined;
@@ -469,7 +492,13 @@ export async function analyzeProductQuestion(
     // resolveQuery() above — a resolved timeframe here actually overrides the
     // window passed to retrieveReviews() instead of being invisible to it.
     const theme = derivedFilters.theme ?? resolvedQuery.filters.theme ?? (resolvedQuery.resolvedFromContext ? resolvedQuery.aspect ?? undefined : undefined);
-    const retrievalWindow = resolvedQuery.timeframe?.window ?? resolveNamedWindow(detectWindowFromQuestion(request.userQuestion));
+    // Undefined when the user named no timeframe → retrieveReviews applies NO
+    // date filter and searches the product's whole history. An explicit
+    // timeframe (resolved compositionally, or matched by name) still wins.
+    const namedFromQuestion = detectWindowFromQuestion(request.userQuestion);
+    const retrievalWindow =
+      resolvedQuery.timeframe?.window ??
+      (namedFromQuestion ? resolveNamedWindow(namedFromQuestion) : undefined);
 
     // A context-resolved follow-up ("show me" after an analysis turn) grounds
     // to the EXACT, already-validated review IDs the prior turn cited, not a

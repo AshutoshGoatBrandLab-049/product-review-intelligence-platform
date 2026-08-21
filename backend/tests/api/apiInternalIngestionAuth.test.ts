@@ -12,6 +12,7 @@ import request from "supertest";
 import jwt from "jsonwebtoken";
 import { createApp } from "../../src/api/app.js";
 import { config } from "../../src/config/index.js";
+import { acquireLock, releaseLock } from "../../src/modules/ingestion/watermarkRepo.js";
 
 const app = createApp();
 
@@ -67,5 +68,25 @@ describe("/internal/ingestion — authorization", () => {
     const res = await request(app).get("/internal/ingestion/health");
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ status: "ready" });
+  });
+
+  it("returns 409 (not 500) when the platform lock is already held", async () => {
+    // Contention between app instances is NORMAL — two backends triggered at the
+    // same instant produce exactly this, and it is how duplicate processing is
+    // prevented. Reporting it as 500 would page someone for the system behaving
+    // correctly, and would bury real failures in the same bucket.
+    await acquireLock("flipkart");
+    try {
+      const res = await request(app)
+        .post("/internal/ingestion/trigger")
+        .set("Authorization", `Bearer ${token("admin")}`)
+        .send({ platform: "flipkart" });
+
+      expect(res.status).toBe(409);
+      expect(res.body).toMatchObject({ status: "conflict" });
+      expect(res.body.message).toMatch(/already held/i);
+    } finally {
+      await releaseLock("flipkart");
+    }
   });
 });
